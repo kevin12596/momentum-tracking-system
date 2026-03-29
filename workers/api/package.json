@@ -8,7 +8,7 @@
     "test:cron": "curl -X POST http://localhost:8787/__scheduled?cron=*/5+1-5+*+*+1-5"
   },
   "dependencies": {
-    "yahoo-finance2": "^2.13.3"
+    "yahoo-finance2": "file:../../yahoo-finance2-3.14.0.tgz"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250405.0",

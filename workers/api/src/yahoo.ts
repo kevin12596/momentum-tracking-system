@@ -1,9 +1,11 @@
 // ============================================================
-// yahoo-finance2 wrapper for Taiwan stock data
+// yahoo-finance2 v3 wrapper for Taiwan stock data
 // ============================================================
 
-import yahooFinance from 'yahoo-finance2';
-import type { StockIndicators } from './types';
+import YahooFinance from 'yahoo-finance2';
+
+// Singleton instance
+const yf = new YahooFinance();
 
 // -------------------------------------------------------
 // Taiwan trading hours guard
@@ -65,24 +67,12 @@ export interface QuoteResult {
 }
 
 export async function fetchQuote(symbol: string): Promise<QuoteResult> {
-  const result = await yahooFinance.quote(symbol, {
-    fields: [
-      'regularMarketPrice',
-      'regularMarketOpen',
-      'regularMarketDayHigh',
-      'regularMarketDayLow',
-      'regularMarketPreviousClose',
-      'regularMarketVolume',
-      'regularMarketChangePercent',
-      'shortName',
-      'longName',
-    ],
-  });
+  const result = await yf.quote(symbol);
 
   return {
     symbol: result.symbol,
     shortName: result.shortName ?? symbol,
-    longName: result.longName,
+    longName: result.longName ?? undefined,
     regularMarketPrice: result.regularMarketPrice ?? 0,
     regularMarketOpen: result.regularMarketOpen ?? 0,
     regularMarketDayHigh: result.regularMarketDayHigh ?? 0,
@@ -102,7 +92,7 @@ export interface HistoricalBar {
   open: number;
   high: number;
   low: number;
-  close: number;          // adjusted close
+  close: number;       // adjusted close
   adjClose: number;
   volume: number;
 }
@@ -111,7 +101,7 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
   const period1 = new Date();
   period1.setDate(period1.getDate() - days);
 
-  const results = await yahooFinance.historical(symbol, {
+  const results = await yf.historical(symbol, {
     period1: period1.toISOString().slice(0, 10),
     interval: '1d',
     events: 'history',
@@ -122,12 +112,12 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     .filter((r) => r.close != null && r.volume != null)
     .map((r) => ({
       date: r.date,
-      open: r.open,
-      high: r.high,
-      low: r.low,
+      open: r.open ?? r.close,
+      high: r.high ?? r.close,
+      low: r.low ?? r.close,
       close: r.adjClose ?? r.close,
       adjClose: r.adjClose ?? r.close,
-      volume: r.volume,
+      volume: r.volume ?? 0,
     }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
