@@ -28,6 +28,10 @@ Thumbs.db
 *.suo
 *.swp
 
+# Tarballs
+*.tgz
+*.tar.gz
+
 # Logs
 *.log
 npm-debug.log*
