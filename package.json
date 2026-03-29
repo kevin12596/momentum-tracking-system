@@ -1,0 +1,14 @@
+{
+  "name": "momentum-tracking-system",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:worker": "cd workers/api && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build",
+    "deploy:worker": "cd workers/api && npm run deploy",
+    "install:all": "cd workers/api && npm install && cd ../../frontend && npm install",
+    "db:migrate": "wrangler d1 execute momentum-db --file=migrations/0001_init.sql",
+    "db:migrate:local": "wrangler d1 execute momentum-db --local --file=migrations/0001_init.sql"
+  }
+}

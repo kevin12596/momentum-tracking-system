@@ -1,0 +1,23 @@
+name = "momentum-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "momentum-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Environment variables (non-secret)
+[vars]
+CLAUDE_DAILY_CALL_LIMIT = "10"
+
+# Cron: every 5 min during Taiwan trading hours (UTC 01:00-05:30, Mon-Fri)
+[triggers]
+crons = ["*/5 1-5 * * 1-5"]
+
+# Development settings
+[dev]
+port = 8787
+local_protocol = "http"
