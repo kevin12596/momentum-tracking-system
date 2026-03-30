@@ -50,6 +50,32 @@ export function fromYahooSymbol(symbol: string): string {
 }
 
 // -------------------------------------------------------
+// TWSE / TPEX Chinese name lookup
+// -------------------------------------------------------
+
+/** Fetch the official Chinese abbreviated name from TWSE autocomplete API.
+ *  Works for both TSE (上市) and OTC (上櫃) stocks.
+ *  Returns null on failure so callers can fall back to Yahoo name. */
+async function fetchZhName(code: string): Promise<string | null> {
+  try {
+    const resp = await fetch(
+      `https://www.twse.com.tw/zh/api/codeQuery?query=${encodeURIComponent(code)}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(3000) }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json() as { suggestions?: string[] };
+    if (data.suggestions && data.suggestions.length > 0) {
+      // Format: "2313\t華通" — take the part after the tab
+      const parts = data.suggestions[0].split('\t');
+      return parts[1]?.trim() || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// -------------------------------------------------------
 // Price / quote fetch
 // -------------------------------------------------------
 
@@ -153,6 +179,12 @@ export async function fetchTaiex(): Promise<TaiexData | null> {
 
 export async function lookupStockName(symbol: string): Promise<string | null> {
   try {
+    // Prefer Chinese name from TWSE for Taiwan stocks
+    const code = fromYahooSymbol(symbol);
+    if (symbol.endsWith('.TW') || symbol.endsWith('.TWO')) {
+      const zhName = await fetchZhName(code);
+      if (zhName) return zhName;
+    }
     const result = await fetchQuote(symbol);
     return result.longName ?? result.shortName ?? null;
   } catch {

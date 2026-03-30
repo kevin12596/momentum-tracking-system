@@ -9,6 +9,7 @@ export interface Env {
   N8N_WEBHOOK_URL: string;
   N8N_WEBHOOK_SECRET: string;
   LINE_CHANNEL_ACCESS_TOKEN: string;
+  LINE_CHANNEL_SECRET: string;   // used for webhook signature verification
   LINE_USER_ID: string;
   CLAUDE_DAILY_CALL_LIMIT: string;
 }

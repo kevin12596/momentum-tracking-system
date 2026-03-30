@@ -61,16 +61,22 @@ async function handleAdd(
   let priceAtAdd: number | null = null;
 
   try {
-    const quote = await fetchQuote(yahooSym);
-    name = quote.longName ?? quote.shortName;
+    const [quote, zhName] = await Promise.all([
+      fetchQuote(yahooSym),
+      lookupStockName(yahooSym),
+    ]);
+    name = zhName ?? quote.longName ?? quote.shortName;
     priceAtAdd = quote.regularMarketPrice;
   } catch {
     // Try OTC
     yahooSym = toYahooSymbol(code, 'OTC');
     exchange = 'OTC';
     try {
-      const quote = await fetchQuote(yahooSym);
-      name = quote.longName ?? quote.shortName;
+      const [quote, zhName] = await Promise.all([
+        fetchQuote(yahooSym),
+        lookupStockName(yahooSym),
+      ]);
+      name = zhName ?? quote.longName ?? quote.shortName;
       priceAtAdd = quote.regularMarketPrice;
     } catch {
       await replyLine(replyToken, `❌ 找不到股票代碼 ${code}，請確認代碼是否正確。`, env);
@@ -194,10 +200,46 @@ async function handleStatus(code: string, replyToken: string, env: Env): Promise
 }
 
 // -------------------------------------------------------
+// LINE signature verification (security)
+// -------------------------------------------------------
+
+async function verifyLineSignature(
+  body: string,
+  signature: string,
+  channelSecret: string
+): Promise<boolean> {
+  try {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw', enc.encode(channelSecret),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+    const expected = btoa(String.fromCharCode(...new Uint8Array(mac)));
+    return expected === signature;
+  } catch {
+    return false;
+  }
+}
+
+// -------------------------------------------------------
 // Main webhook handler
 // -------------------------------------------------------
 
 export async function handleLineWebhook(request: Request, env: Env): Promise<Response> {
+  // Read raw body first for signature verification
+  const rawBody = await request.text();
+
+  // Verify LINE signature when secret is configured
+  if (env.LINE_CHANNEL_SECRET) {
+    const signature = request.headers.get('X-Line-Signature') ?? '';
+    const valid = await verifyLineSignature(rawBody, signature, env.LINE_CHANNEL_SECRET);
+    if (!valid) {
+      console.warn('LINE webhook: invalid signature');
+      return new Response('Unauthorized', { status: 401 });
+    }
+  }
+
   let body: {
     events: Array<{
       type: string;
@@ -207,7 +249,7 @@ export async function handleLineWebhook(request: Request, env: Env): Promise<Res
   };
 
   try {
-    body = await request.json();
+    body = JSON.parse(rawBody);
   } catch {
     return new Response('Bad Request', { status: 400 });
   }

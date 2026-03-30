@@ -47,13 +47,19 @@ export async function handleWatchlist(request: Request, env: Env): Promise<Respo
     // Try TSE first, then OTC
     const tseSymbol = toYahooSymbol(symbol, 'TSE');
     try {
-      const quote = await fetchQuote(tseSymbol);
-      return json({ symbol: tseSymbol, name: quote.longName ?? quote.shortName, exchange: 'TSE' });
+      const [quote, zhName] = await Promise.all([
+        fetchQuote(tseSymbol),
+        lookupStockName(tseSymbol),
+      ]);
+      return json({ symbol: tseSymbol, name: zhName ?? quote.longName ?? quote.shortName, exchange: 'TSE' });
     } catch {
       const otcSymbol = toYahooSymbol(symbol, 'OTC');
       try {
-        const quote = await fetchQuote(otcSymbol);
-        return json({ symbol: otcSymbol, name: quote.longName ?? quote.shortName, exchange: 'OTC' });
+        const [quote, zhName] = await Promise.all([
+          fetchQuote(otcSymbol),
+          lookupStockName(otcSymbol),
+        ]);
+        return json({ symbol: otcSymbol, name: zhName ?? quote.longName ?? quote.shortName, exchange: 'OTC' });
       } catch {
         return err('Stock not found', 404);
       }

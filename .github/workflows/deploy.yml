@@ -118,6 +118,7 @@ jobs:
         run: |
           echo "${{ secrets.ANTHROPIC_API_KEY }}"         | npx wrangler secret put ANTHROPIC_API_KEY
           echo "${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}" | npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+          echo "${{ secrets.LINE_CHANNEL_SECRET }}"       | npx wrangler secret put LINE_CHANNEL_SECRET
           echo "${{ secrets.LINE_USER_ID }}"              | npx wrangler secret put LINE_USER_ID
           # n8n is optional — only set if secret is provided
           if [ -n "${{ secrets.N8N_WEBHOOK_URL }}" ]; then
