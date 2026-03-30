@@ -10,9 +10,29 @@ import {
   insertWatchlistStock,
   updateWatchlistStock,
   setStockActive,
+  writebackIndicators,
 } from '../db';
-import { fetchQuote, toYahooSymbol, lookupStockName } from '../yahoo';
+import { fetchQuote, fetchStockData, toYahooSymbol, lookupStockName } from '../yahoo';
+import { calcIndicators, calcTrendState, getPullbackZone } from '../indicators';
 import { enrichConceptTags } from '../claude';
+
+/** Fire-and-forget: fetch 60-day data and write back indicators for a newly added / updated stock */
+async function quickScan(id: string, symbol: string, db: D1Database): Promise<void> {
+  try {
+    const data = await fetchStockData(symbol);
+    if (!data) return;
+    const { quote, history } = data;
+    // Use a minimal stock stub — we only need the zone thresholds from DB
+    const stub = await getWatchlistById(db, id);
+    if (!stub) return;
+    const ind = calcIndicators(stub, quote, history);
+    const trendState = calcTrendState(ind.currentPrice, ind.day60High, ind.closes, ind.volumes);
+    const zone = getPullbackZone(ind.pullbackPct, stub, 'NORMAL');
+    await writebackIndicators(db, id, ind, zone, trendState);
+  } catch (e) {
+    console.error(`quickScan failed for ${symbol}:`, e);
+  }
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -131,8 +151,9 @@ export async function handleWatchlist(request: Request, env: Env): Promise<Respo
       review_after: null,
     });
 
-    // Trigger async enrichment (non-blocking)
-    env.DB && enrichConceptTags(id, yahooSym, name, env).catch(console.error);
+    // Fire-and-forget: enrichment + immediate 60-day scan
+    enrichConceptTags(id, yahooSym, name, env).catch(console.error);
+    quickScan(id, yahooSym, env.DB).catch(console.error);
 
     const stock = await getWatchlistById(env.DB, id);
     return json(stock, 201);
@@ -161,6 +182,12 @@ export async function handleWatchlist(request: Request, env: Env): Promise<Respo
     if (body.active !== undefined) updates.active = body.active;
 
     await updateWatchlistStock(env.DB, pathParts[0], updates as any);
+
+    // Re-scan immediately if high_ref_price or pullback thresholds changed
+    if (body.high_ref_price !== undefined || body.pullback_ideal_pct !== undefined || body.pullback_watch_pct !== undefined) {
+      quickScan(pathParts[0], existing.symbol, env.DB).catch(console.error);
+    }
+
     const updated = await getWatchlistById(env.DB, pathParts[0]);
     return json(updated);
   }
