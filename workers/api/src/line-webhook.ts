@@ -29,18 +29,45 @@ const PATTERNS = {
 // LINE API helpers
 // -------------------------------------------------------
 
-async function replyLine(replyToken: string, text: string, env: Env): Promise<void> {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
+// -------------------------------------------------------
+// LINE reply helpers
+// -------------------------------------------------------
+
+interface QuickReplyItem {
+  type: 'action';
+  action: { type: 'message'; label: string; text: string };
+}
+
+const MAIN_MENU: QuickReplyItem[] = [
+  { type: 'action', action: { type: 'message', label: '📋 清單', text: '清單' } },
+  { type: 'action', action: { type: 'message', label: '➕ 新增股票', text: '新增 ' } },
+  { type: 'action', action: { type: 'message', label: '📊 查狀態', text: '狀態 ' } },
+  { type: 'action', action: { type: 'message', label: '⏸ 暫停追蹤', text: '暫停 ' } },
+  { type: 'action', action: { type: 'message', label: '🗑 刪除股票', text: '刪除 ' } },
+];
+
+async function replyLine(
+  replyToken: string,
+  text: string,
+  env: Env,
+  quickReply?: QuickReplyItem[]
+): Promise<void> {
+  const message: Record<string, unknown> = { type: 'text', text };
+  if (quickReply && quickReply.length > 0) {
+    message.quickReply = { items: quickReply };
+  }
+  const resp = await fetch('https://api.line.me/v2/bot/message/reply', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,
     },
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: 'text', text }],
-    }),
+    body: JSON.stringify({ replyToken, messages: [message] }),
   });
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => '');
+    console.error(`LINE reply failed [${resp.status}]: ${errBody}`);
+  }
 }
 
 // -------------------------------------------------------
@@ -116,7 +143,12 @@ async function handleAdd(
   await replyLine(
     replyToken,
     `✅ 已新增追蹤：${name}（${code}）\n${priceStr}\n理想買入回測：${pullback_ideal_pct}%\n正在分析族群標籤...`,
-    env
+    env,
+    [
+      { type: 'action', action: { type: 'message', label: '📋 查看清單', text: '清單' } },
+      { type: 'action', action: { type: 'message', label: `📊 ${code} 狀態`, text: `狀態 ${code}` } },
+      { type: 'action', action: { type: 'message', label: '➕ 再新增', text: '新增 ' } },
+    ]
   );
 }
 
@@ -264,11 +296,24 @@ export async function handleLineWebhook(request: Request, env: Env): Promise<Res
 
   let matched = false;
 
-  // 新增 XXXX [nn]
-  const addMatch = text.match(PATTERNS.add);
-  if (addMatch) {
+  // / 或 菜單 → 顯示快速選單
+  if (/^[\/菜單]$/.test(text) || text === '選單' || text === 'menu') {
     matched = true;
-    await handleAdd(addMatch[1], addMatch[2], replyToken, env);
+    await replyLine(
+      replyToken,
+      '👇 請選擇功能，或直接輸入指令：\n\n• 新增 XXXX [理想回測%]\n• 狀態 XXXX\n• 清單\n• 暫停 XXXX\n• 刪除 XXXX',
+      env,
+      MAIN_MENU
+    );
+  }
+
+  // 新增 XXXX [nn]
+  if (!matched) {
+    const addMatch = text.match(PATTERNS.add);
+    if (addMatch) {
+      matched = true;
+      await handleAdd(addMatch[1], addMatch[2], replyToken, env);
+    }
   }
 
   // 刪除 XXXX
@@ -304,11 +349,13 @@ export async function handleLineWebhook(request: Request, env: Env): Promise<Res
     }
   }
 
+  // 未識別指令 → 顯示快速選單
   if (!matched) {
     await replyLine(
       replyToken,
-      '📖 支援指令：\n• 新增 XXXX [回測%]\n• 刪除 XXXX\n• 暫停 XXXX\n• 清單\n• 狀態 XXXX',
-      env
+      '❓ 看不懂這個指令\n\n請輸入 / 開啟功能選單，或直接點下方按鈕：',
+      env,
+      MAIN_MENU
     );
   }
 
