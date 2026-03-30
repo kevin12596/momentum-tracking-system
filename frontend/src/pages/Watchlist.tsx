@@ -15,12 +15,20 @@ const ZONE_ORDER: Record<string, number> = { IDEAL: 0, DEEP: 1, WATCH: 2, NONE: 
 const ZONE_LABELS: Record<FilterZone, string> = {
   ALL: '全部', IDEAL: '理想帶', DEEP: '深度', WATCH: '觀察帶', NONE: '尚未到位',
 };
+// Active = solid colored; Inactive = white bg + colored text + colored border for easy scanning
 const ZONE_ACTIVE: Record<FilterZone, { color: string; bg: string; border: string }> = {
-  ALL:   { color: 'var(--accent)',  bg: 'var(--accent-bg)', border: 'var(--accent)' },
-  IDEAL: { color: 'var(--green)',   bg: 'var(--green-bg)',  border: '#6EE7B7' },
-  DEEP:  { color: 'var(--red)',     bg: 'var(--red-bg)',    border: '#FCA5A5' },
-  WATCH: { color: 'var(--amber)',   bg: 'var(--amber-bg)',  border: '#FCD34D' },
-  NONE:  { color: 'var(--text-3)',  bg: 'var(--surface-2)', border: 'var(--border)' },
+  ALL:   { color: '#fff',           bg: 'var(--accent)',   border: 'var(--accent)' },
+  IDEAL: { color: '#fff',           bg: 'var(--green)',    border: 'var(--green)' },
+  DEEP:  { color: '#fff',           bg: 'var(--red)',      border: 'var(--red)' },
+  WATCH: { color: '#fff',           bg: 'var(--amber)',    border: 'var(--amber)' },
+  NONE:  { color: '#fff',           bg: 'var(--text-2)',   border: 'var(--text-2)' },
+};
+const ZONE_INACTIVE: Record<FilterZone, { color: string; bg: string; border: string }> = {
+  ALL:   { color: 'var(--accent)',  bg: 'var(--surface)',  border: 'var(--accent)' },
+  IDEAL: { color: 'var(--green)',   bg: 'var(--surface)',  border: '#6EE7B7' },
+  DEEP:  { color: 'var(--red)',     bg: 'var(--surface)',  border: '#FCA5A5' },
+  WATCH: { color: 'var(--amber)',   bg: 'var(--surface)',  border: '#FCD34D' },
+  NONE:  { color: 'var(--text-2)',  bg: 'var(--surface)',  border: 'var(--border-2)' },
 };
 
 export function Watchlist() {
@@ -117,16 +125,17 @@ export function Watchlist() {
         <div style={{ display: 'flex', gap: 6 }}>
           {(['ALL', 'IDEAL', 'WATCH', 'DEEP', 'NONE'] as FilterZone[]).map((z) => {
             const active = filter === z;
-            const conf = ZONE_ACTIVE[z];
+            const conf = active ? ZONE_ACTIVE[z] : ZONE_INACTIVE[z];
             return (
               <button key={z} onClick={() => setFilter(z)} style={{
-                padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontSize: 12, fontWeight: active ? 600 : 400,
-                background: active ? conf.bg : 'var(--surface)',
-                color: active ? conf.color : 'var(--text-3)',
-                border: `1px solid ${active ? conf.border : 'var(--border)'}`,
+                padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontSize: 12,
+                fontWeight: active ? 700 : 500,
+                background: conf.bg,
+                color: conf.color,
+                border: `1.5px solid ${conf.border}`,
                 transition: 'all .12s',
               }}>
-                {ZONE_LABELS[z]}{z !== 'ALL' && ` · ${zoneCounts[z]}`}
+                {ZONE_LABELS[z]}{z !== 'ALL' && zoneCounts[z] > 0 && ` · ${zoneCounts[z]}`}
               </button>
             );
           })}
