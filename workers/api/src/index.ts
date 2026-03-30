@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex } from './yahoo';
+import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -21,6 +21,7 @@ import {
   getAllSectors,
   getMarketState,
   updateMarketState,
+  updateWatchlistStock,
   writebackIndicators,
   updateLastNotified,
   insertNotificationLog,
@@ -156,6 +157,21 @@ async function runPriceMonitor(env: Env): Promise<void> {
   if (isWeeklyRefreshTime()) {
     console.log('Weekly enrichment refresh triggered');
     ctx_waitUntil_shim(() => refreshAllConceptTags(stocks, env));
+
+    // Also refresh Chinese names for stocks that have English names
+    ctx_waitUntil_shim(async () => {
+      for (const stock of stocks) {
+        const isEnglish = (stock.name.match(/[\u4e00-\u9fff]/g) ?? []).length < 2;
+        if (isEnglish) {
+          const code = stock.symbol.replace(/\.(TW|TWO)$/, '');
+          const zhName = await lookupStockName(stock.symbol).catch(() => null);
+          if (zhName && zhName !== stock.name) {
+            await updateWatchlistStock(env.DB, stock.id, { name: zhName } as any).catch(console.error);
+            console.log(`Refreshed name: ${stock.symbol} → ${zhName}`);
+          }
+        }
+      }
+    });
   }
 
   // ⑤ Monthly review check
