@@ -154,7 +154,7 @@ jobs:
         working-directory: frontend
         run: npm run build
         env:
-          VITE_API_BASE: https://momentum-api.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev/api
+          VITE_API_BASE: https://momentum-api.kvn-liang.workers.dev/api
 
       - name: Create Pages project (if not exists)
         env:
