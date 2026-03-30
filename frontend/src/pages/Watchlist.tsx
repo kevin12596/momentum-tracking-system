@@ -1,5 +1,5 @@
 // ============================================================
-// Watchlist — stock list management page (spec §7.2)
+// Watchlist — stock list management page (Stripe light theme)
 // ============================================================
 
 import { useEffect, useState } from 'react';
@@ -9,6 +9,19 @@ import { StockCard } from '../components/StockCard';
 import { AddStockForm } from '../components/AddStockForm';
 
 type FilterZone = 'ALL' | 'WATCH' | 'IDEAL' | 'DEEP' | 'NONE';
+type SortKey = 'zone' | 'name' | 'pullback' | 'rs';
+
+const ZONE_ORDER: Record<string, number> = { IDEAL: 0, DEEP: 1, WATCH: 2, NONE: 3 };
+const ZONE_LABELS: Record<FilterZone, string> = {
+  ALL: '全部', IDEAL: '理想帶', DEEP: '深度', WATCH: '觀察帶', NONE: '尚未到位',
+};
+const ZONE_ACTIVE: Record<FilterZone, { color: string; bg: string; border: string }> = {
+  ALL:   { color: 'var(--accent)',  bg: 'var(--accent-bg)', border: 'var(--accent)' },
+  IDEAL: { color: 'var(--green)',   bg: 'var(--green-bg)',  border: '#6EE7B7' },
+  DEEP:  { color: 'var(--red)',     bg: 'var(--red-bg)',    border: '#FCA5A5' },
+  WATCH: { color: 'var(--amber)',   bg: 'var(--amber-bg)',  border: '#FCD34D' },
+  NONE:  { color: 'var(--text-3)',  bg: 'var(--surface-2)', border: 'var(--border)' },
+};
 
 export function Watchlist() {
   const [stocks, setStocks] = useState<WatchlistStock[]>([]);
@@ -17,115 +30,141 @@ export function Watchlist() {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<FilterZone>('ALL');
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<SortKey>('zone');
 
   async function loadData() {
-    const [s, sec] = await Promise.all([
-      api.watchlist.list(),
-      api.sectors.list(),
-    ]);
+    const [s, sec] = await Promise.all([api.watchlist.list(), api.sectors.list()]);
     setStocks(s);
     setSectors(sec);
   }
 
-  useEffect(() => {
-    loadData().finally(() => setLoading(false));
-  }, []);
+  useEffect(() => { loadData().finally(() => setLoading(false)); }, []);
 
-  function handleAdded() {
-    setShowForm(false);
-    loadData();
-  }
+  function handleAdded() { setShowForm(false); loadData(); }
 
-  const filtered = stocks.filter((s) => {
-    if (filter !== 'ALL' && s.pullback_zone !== filter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!s.name.toLowerCase().includes(q) && !s.symbol.toLowerCase().includes(q)) return false;
-    }
-    return true;
-  });
+  const filtered = stocks
+    .filter((s) => {
+      if (filter !== 'ALL' && s.pullback_zone !== filter) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        if (!s.name.toLowerCase().includes(q) && !s.symbol.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (sort === 'zone') return (ZONE_ORDER[a.pullback_zone ?? 'NONE'] ?? 3) - (ZONE_ORDER[b.pullback_zone ?? 'NONE'] ?? 3);
+      if (sort === 'rs') return (b.rs_score ?? 0) - (a.rs_score ?? 0);
+      if (sort === 'pullback') return (b.pullback_from_high ?? 0) - (a.pullback_from_high ?? 0);
+      return a.name.localeCompare(b.name, 'zh-TW');
+    });
 
-  if (loading) return <div style={{ color: '#718096', padding: 20 }}>載入中...</div>;
+  const zoneCounts: Record<FilterZone, number> = { ALL: stocks.length, IDEAL: 0, DEEP: 0, WATCH: 0, NONE: 0 };
+  stocks.forEach(s => { zoneCounts[s.pullback_zone ?? 'NONE']++; });
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: 'var(--text-3)' }}>
+      載入中...
+    </div>
+  );
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontSize: 20, color: '#e2e8f0' }}>
-          追蹤清單
-          <span style={{ fontSize: 13, color: '#718096', marginLeft: 8 }}>
-            {stocks.length} 支
-          </span>
-        </h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-1)', letterSpacing: '-0.03em' }}>追蹤清單</h1>
+          <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 3 }}>{stocks.length} 支股票 · 點擊任一股票查看詳情</p>
+        </div>
         <button
           onClick={() => setShowForm(true)}
           style={{
-            padding: '8px 16px', borderRadius: 4, cursor: 'pointer',
-            background: '#3182ce', color: '#fff', border: 'none', fontSize: 14, fontWeight: 600,
+            padding: '8px 18px', borderRadius: 'var(--radius)', cursor: 'pointer',
+            background: 'var(--accent)', color: '#fff', border: 'none',
+            fontSize: 13, fontWeight: 600, boxShadow: '0 1px 4px rgba(99,91,255,.3)',
           }}
-        >+ 新增</button>
+        >+ 新增股票</button>
       </div>
 
       {/* Add form modal */}
       {showForm && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 50,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'fixed', inset: 0, background: 'rgba(26,31,54,.4)', zIndex: 50,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(2px)',
         }}>
           <div style={{
-            background: '#1a202c', border: '1px solid #2d3748', borderRadius: 8,
-            padding: 24, width: '100%', maxWidth: 520,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
+            padding: 24, width: '100%', maxWidth: 520, boxShadow: 'var(--shadow-md)',
           }}>
             <AddStockForm onAdded={handleAdded} onCancel={() => setShowForm(false)} />
           </div>
         </div>
       )}
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      {/* Filter + Sort bar */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <input
           style={{
-            padding: '6px 12px', background: '#2d3748', border: '1px solid #4a5568',
-            borderRadius: 4, color: '#e2e8f0', fontSize: 13, flex: '1 1 200px',
+            padding: '7px 12px', background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)', color: 'var(--text-1)', fontSize: 13, flex: '1 1 180px',
+            outline: 'none',
           }}
-          placeholder="搜尋股票名稱或代號..."
+          placeholder="搜尋名稱或代號..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        {(['ALL', 'WATCH', 'IDEAL', 'DEEP', 'NONE'] as FilterZone[]).map((z) => (
-          <button
-            key={z}
-            onClick={() => setFilter(z)}
+
+        {/* Zone filter chips */}
+        <div style={{ display: 'flex', gap: 6 }}>
+          {(['ALL', 'IDEAL', 'WATCH', 'DEEP', 'NONE'] as FilterZone[]).map((z) => {
+            const active = filter === z;
+            const conf = ZONE_ACTIVE[z];
+            return (
+              <button key={z} onClick={() => setFilter(z)} style={{
+                padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontSize: 12, fontWeight: active ? 600 : 400,
+                background: active ? conf.bg : 'var(--surface)',
+                color: active ? conf.color : 'var(--text-3)',
+                border: `1px solid ${active ? conf.border : 'var(--border)'}`,
+                transition: 'all .12s',
+              }}>
+                {ZONE_LABELS[z]}{z !== 'ALL' && ` · ${zoneCounts[z]}`}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Sort */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>排序</span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
             style={{
-              padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
-              background: filter === z ? '#3182ce' : '#2d3748',
-              color: filter === z ? '#fff' : '#a0aec0',
-              border: `1px solid ${filter === z ? '#3182ce' : '#4a5568'}`,
+              padding: '5px 10px', background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)', color: 'var(--text-2)', fontSize: 12, cursor: 'pointer', outline: 'none',
             }}
           >
-            {z === 'ALL' ? '全部' : z === 'NONE' ? '尚未到位' : z}
-          </button>
-        ))}
+            <option value="zone">區間優先</option>
+            <option value="rs">RS 強度 ↓</option>
+            <option value="pullback">回測幅度 ↓</option>
+            <option value="name">股票名稱</option>
+          </select>
+        </div>
       </div>
 
       {/* Stock grid */}
       {filtered.length === 0 ? (
-        <div style={{ color: '#718096', padding: '20px 0' }}>
-          {stocks.length === 0 ? '清單為空，點擊「新增」開始追蹤。' : '沒有符合篩選條件的股票。'}
+        <div style={{
+          padding: '40px 20px', textAlign: 'center', color: 'var(--text-3)',
+          border: '1px dashed var(--border)', borderRadius: 'var(--radius-lg)',
+        }}>
+          {stocks.length === 0
+            ? <>清單為空。<a href="#" onClick={() => setShowForm(true)} style={{ color: 'var(--accent)', fontWeight: 500 }}>新增第一支股票</a></>
+            : '沒有符合篩選條件的股票。'}
         </div>
       ) : (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
-          gap: 16,
-        }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
           {filtered.map((stock) => (
-            <StockCard
-              key={stock.id}
-              stock={stock}
-              sectors={sectors}
-              onUpdated={loadData}
-            />
+            <StockCard key={stock.id} stock={stock} sectors={sectors} onUpdated={loadData} />
           ))}
         </div>
       )}
