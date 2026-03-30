@@ -1,7 +1,12 @@
 name = "momentum-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat_v2"]
+compatibility_flags = ["nodejs_compat"]
+
+# Polyfill Node.js globals that @deno/shim-deno (yahoo-finance2 dep) references at bundle time
+[define]
+__dirname = '""'
+__filename = '""'
 account_id = "1cfa1fa649f1c943d3cdf07098664682"
 
 # D1 database binding
