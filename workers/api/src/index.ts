@@ -247,14 +247,7 @@ async function processStock(
   // ② Ideal zone entry
   if (triggers.idealZoneEntry) {
     const msg = buildIdealZoneMessage(stock, ind, sectors);
-    const payload = {
-      triggerType: 'PULLBACK_IDEAL' as const,
-      symbol: stock.symbol,
-      name: stock.name,
-      message: msg,
-      timestamp: new Date().toISOString(),
-    };
-    const sent = await postToN8n(payload, env);
+    const sent = await sendNotification(msg, 'PULLBACK_IDEAL', stock, env);
     if (sent) {
       await updateLastNotified(env.DB, stock.id);
       await insertNotificationLog(env.DB, stock.symbol, 'PULLBACK_IDEAL', msg);
@@ -265,14 +258,7 @@ async function processStock(
   // ③ Watch zone entry
   if (triggers.watchZoneEntry) {
     const msg = `👀 觀察帶提醒\n${stock.name}（${stock.symbol.replace(/\.(TW|TWO)$/, '')}）\n現價 NT$${ind.currentPrice.toFixed(0)}，回測 ${ind.pullbackPct.toFixed(1)}%，進入觀察帶`;
-    const payload = {
-      triggerType: 'PULLBACK_WATCH' as const,
-      symbol: stock.symbol,
-      name: stock.name,
-      message: msg,
-      timestamp: new Date().toISOString(),
-    };
-    const sent = await postToN8n(payload, env);
+    const sent = await sendNotification(msg, 'PULLBACK_WATCH', stock, env);
     if (sent) {
       await updateLastNotified(env.DB, stock.id);
       await insertNotificationLog(env.DB, stock.symbol, 'PULLBACK_WATCH', msg);
@@ -301,6 +287,31 @@ async function runMonthlyReviewCheck(env: Env): Promise<void> {
       .bind(newReviewAfter.toISOString().slice(0, 10), stock.id)
       .run();
   }
+}
+
+// -------------------------------------------------------
+// Unified notification sender
+// Primary: direct LINE push; secondary: n8n if configured
+// -------------------------------------------------------
+
+async function sendNotification(
+  msg: string,
+  type: string,
+  stock: WatchlistStock,
+  env: Env
+): Promise<boolean> {
+  // Always push directly to LINE
+  const sent = await pushLineMessage(msg, env);
+
+  // Optionally relay to n8n if webhook URL is set
+  if (env.N8N_WEBHOOK_URL) {
+    await postToN8n(
+      { triggerType: type as import('./types').TriggerType, symbol: stock.symbol, name: stock.name, message: msg, timestamp: new Date().toISOString() },
+      env
+    ).catch((err) => console.warn('n8n relay failed (non-fatal):', err));
+  }
+
+  return sent;
 }
 
 // Shim for ctx.waitUntil when not available (type-safety workaround)
