@@ -1,0 +1,9 @@
+# Copy to .dev.vars (never commit .dev.vars)
+# Used by `wrangler dev` for local secrets
+
+ANTHROPIC_API_KEY=sk-ant-...
+N8N_WEBHOOK_URL=https://your-n8n-instance.com/webhook/...
+N8N_WEBHOOK_SECRET=your-webhook-secret
+LINE_CHANNEL_ACCESS_TOKEN=your-line-channel-token
+LINE_USER_ID=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+CLAUDE_DAILY_CALL_LIMIT=10
