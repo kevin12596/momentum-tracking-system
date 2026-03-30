@@ -1,7 +1,7 @@
 name = "momentum-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat_v2"]
 account_id = "1cfa1fa649f1c943d3cdf07098664682"
 
 # D1 database binding
