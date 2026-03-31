@@ -1,5 +1,8 @@
 // ============================================================
 // yahoo-finance2 v3 wrapper for Taiwan stock data
+// Price strategy: use daily closing prices only (stable, official).
+// TW stocks (.TW / .TWO) → TWSE/TPEX after-market history, no real-time.
+// Non-TW (e.g. ^TWII) → Yahoo Finance.
 // ============================================================
 
 import YahooFinance from 'yahoo-finance2';
@@ -53,9 +56,6 @@ export function fromYahooSymbol(symbol: string): string {
 // TWSE / TPEX Chinese name lookup
 // -------------------------------------------------------
 
-/** Fetch the official Chinese abbreviated name from TWSE autocomplete API.
- *  Works for both TSE (上市) and OTC (上櫃) stocks.
- *  Returns null on failure so callers can fall back to Yahoo name. */
 async function fetchZhName(code: string): Promise<string | null> {
   try {
     const resp = await fetch(
@@ -65,7 +65,6 @@ async function fetchZhName(code: string): Promise<string | null> {
     if (!resp.ok) return null;
     const data = await resp.json() as { suggestions?: string[] };
     if (data.suggestions && data.suggestions.length > 0) {
-      // Format: "2313\t華通" — take the part after the tab
       const parts = data.suggestions[0].split('\t');
       return parts[1]?.trim() || null;
     }
@@ -76,43 +75,7 @@ async function fetchZhName(code: string): Promise<string | null> {
 }
 
 // -------------------------------------------------------
-// TWSE / TPEX real-time price (fallback when Yahoo quote fails)
-// mis.twse.com.tw — official exchange real-time data
-// -------------------------------------------------------
-
-interface TwseStockInfo {
-  z?: string;  // current price (or "-" before market open)
-  y?: string;  // yesterday close
-  h?: string;  // today high
-  l?: string;  // today low
-  o?: string;  // today open
-  v?: string;  // volume (lots)
-  n?: string;  // Chinese name
-}
-
-async function fetchTwsePrice(code: string, exchange: 'TSE' | 'OTC'): Promise<{ price: number; prevClose: number } | null> {
-  try {
-    const exPrefix = exchange === 'OTC' ? 'otc' : 'tse';
-    const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exPrefix}_${code}.tw&json=1&delay=0`;
-    const resp = await fetch(url, {
-      headers: { 'Referer': 'https://mis.twse.com.tw/', 'User-Agent': 'Mozilla/5.0' },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json() as { msgArray?: TwseStockInfo[]; rtmessage?: string };
-    const item = data.msgArray?.[0];
-    if (!item) return null;
-    const price = parseFloat(item.z ?? '') || 0;
-    const prevClose = parseFloat(item.y ?? '') || 0;
-    // z = "-" before market open, use prevClose in that case
-    return { price: price > 0 ? price : prevClose, prevClose };
-  } catch {
-    return null;
-  }
-}
-
-// -------------------------------------------------------
-// Price / quote fetch
+// Quote result type
 // -------------------------------------------------------
 
 export interface QuoteResult {
@@ -128,48 +91,50 @@ export interface QuoteResult {
   regularMarketChangePercent: number;
 }
 
+/**
+ * Fetch quote data.
+ * For TW stocks: returns only the name; price fields are populated later
+ * from historical data in fetchStockData (closing prices only, no real-time).
+ * For non-TW (e.g. ^TWII index): uses Yahoo Finance.
+ */
 export async function fetchQuote(symbol: string): Promise<QuoteResult> {
-  // For Taiwan stocks (.TW / .TWO), try TWSE official API first.
-  // Yahoo Finance quote endpoint is sometimes blocked from cloud IPs.
-  let twsePrice: { price: number; prevClose: number } | null = null;
   const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
+
   if (isTW) {
     const code = fromYahooSymbol(symbol);
-    const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
-    twsePrice = await fetchTwsePrice(code, exchange).catch(() => null);
+    const shortName = await fetchZhName(code).catch(() => null) ?? symbol;
+    return {
+      symbol,
+      shortName,
+      longName: undefined,
+      regularMarketPrice: 0,
+      regularMarketOpen: 0,
+      regularMarketDayHigh: 0,
+      regularMarketDayLow: 0,
+      regularMarketPreviousClose: 0,
+      regularMarketVolume: 0,
+      regularMarketChangePercent: 0,
+    };
   }
 
-  // Try Yahoo quote (for non-TW symbols or when TWSE didn't return a name)
-  let yahooResult: Awaited<ReturnType<typeof yf.quote>> | null = null;
-  try {
-    yahooResult = await yf.quote(symbol);
-  } catch {
-    // Yahoo blocked or failed — use TWSE data only
-  }
-
-  const regularMarketPrice =
-    twsePrice?.price ||
-    yahooResult?.regularMarketPrice ||
-    yahooResult?.regularMarketPreviousClose ||
-    twsePrice?.prevClose ||
-    0;
-
+  // Non-TW symbols (^TWII, US stocks, etc.)
+  const result = await yf.quote(symbol);
   return {
-    symbol: yahooResult?.symbol ?? symbol,
-    shortName: yahooResult?.shortName ?? symbol,
-    longName: yahooResult?.longName ?? undefined,
-    regularMarketPrice,
-    regularMarketOpen: yahooResult?.regularMarketOpen ?? 0,
-    regularMarketDayHigh: yahooResult?.regularMarketDayHigh ?? 0,
-    regularMarketDayLow: yahooResult?.regularMarketDayLow ?? 0,
-    regularMarketPreviousClose: yahooResult?.regularMarketPreviousClose ?? twsePrice?.prevClose ?? 0,
-    regularMarketVolume: yahooResult?.regularMarketVolume ?? 0,
-    regularMarketChangePercent: yahooResult?.regularMarketChangePercent ?? 0,
+    symbol: result.symbol,
+    shortName: result.shortName ?? symbol,
+    longName: result.longName ?? undefined,
+    regularMarketPrice: result.regularMarketPrice || result.regularMarketPreviousClose || 0,
+    regularMarketOpen: result.regularMarketOpen ?? 0,
+    regularMarketDayHigh: result.regularMarketDayHigh ?? 0,
+    regularMarketDayLow: result.regularMarketDayLow ?? 0,
+    regularMarketPreviousClose: result.regularMarketPreviousClose ?? 0,
+    regularMarketVolume: result.regularMarketVolume ?? 0,
+    regularMarketChangePercent: result.regularMarketChangePercent ?? 0,
   };
 }
 
 // -------------------------------------------------------
-// Historical OHLCV fetch (adjusted for dividends)
+// Historical OHLCV fetch
 // -------------------------------------------------------
 
 export interface HistoricalBar {
@@ -177,12 +142,12 @@ export interface HistoricalBar {
   open: number;
   high: number;
   low: number;
-  close: number;       // adjusted close
+  close: number;
   adjClose: number;
   volume: number;
 }
 
-// TWSE/TPEX after-market daily data — used as fallback when Yahoo historical is blocked.
+// TWSE after-market daily data (official, unblocked).
 // TSE:  twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=2330&date=20260301&response=json
 // OTC:  tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=115/03&stkno=3037&...
 async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: number): Promise<HistoricalBar[]> {
@@ -216,15 +181,14 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
         rows = data.aaData;
       }
 
-      // Rows are oldest-first; insert at front so final array is chronological
       const monthBars: HistoricalBar[] = [];
       for (const row of rows) {
-        // Date: "115/03/03" (ROC) → convert year
+        // Date: "115/03/03" (ROC calendar) → Gregorian
         const parts = row[0].split('/');
         if (parts.length < 3) continue;
-        const year = parseInt(parts[0]) + 1911;
+        const year  = parseInt(parts[0]) + 1911;
         const month = parseInt(parts[1]);
-        const day = parseInt(parts[2]);
+        const day   = parseInt(parts[2]);
         const open  = parseFloat(row[3].replace(/,/g, '')) || 0;
         const high  = parseFloat(row[4].replace(/,/g, '')) || 0;
         const low   = parseFloat(row[5].replace(/,/g, '')) || 0;
@@ -234,10 +198,9 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
           monthBars.push({ date: new Date(year, month - 1, day), open, high, low, close, adjClose: close, volume: vol });
         }
       }
-      // Prepend this month's bars (older months added in later iterations)
       bars.unshift(...monthBars);
     } catch {
-      // Skip failed month
+      // Skip failed month, try next
     }
   }
 
@@ -245,45 +208,38 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
 }
 
 export async function fetchHistory(symbol: string, days: number = 65): Promise<HistoricalBar[]> {
-  // Try Yahoo Finance first
-  try {
-    const period1 = new Date();
-    period1.setDate(period1.getDate() - days);
-
-    const results = await yf.historical(symbol, {
-      period1: period1.toISOString().slice(0, 10),
-      interval: '1d',
-      events: 'history',
-      includeAdjustedClose: true,
-    });
-
-    const bars = results
-      .filter((r) => r.close != null && r.volume != null)
-      .map((r) => ({
-        date: r.date,
-        open: r.open ?? r.close,
-        high: r.high ?? r.close,
-        low: r.low ?? r.close,
-        close: r.adjClose ?? r.close,
-        adjClose: r.adjClose ?? r.close,
-        volume: r.volume ?? 0,
-      }))
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    if (bars.length >= 20) return bars;
-  } catch {
-    // Yahoo historical blocked or failed — fall through to TWSE
-  }
-
-  // TWSE fallback for Taiwan stocks
   const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
+
   if (isTW) {
+    // Use official TWSE/TPEX after-market data directly (no Yahoo for TW stocks)
     const code = fromYahooSymbol(symbol);
     const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
     return fetchTwseHistory(code, exchange, days);
   }
 
-  return [];
+  // Non-TW: use Yahoo historical
+  const period1 = new Date();
+  period1.setDate(period1.getDate() - days);
+
+  const results = await yf.historical(symbol, {
+    period1: period1.toISOString().slice(0, 10),
+    interval: '1d',
+    events: 'history',
+    includeAdjustedClose: true,
+  });
+
+  return results
+    .filter((r) => r.close != null && r.volume != null)
+    .map((r) => ({
+      date: r.date,
+      open: r.open ?? r.close,
+      high: r.high ?? r.close,
+      low: r.low ?? r.close,
+      close: r.adjClose ?? r.close,
+      adjClose: r.adjClose ?? r.close,
+      volume: r.volume ?? 0,
+    }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 // -------------------------------------------------------
@@ -317,7 +273,6 @@ export async function fetchTaiex(): Promise<TaiexData | null> {
 
 export async function lookupStockName(symbol: string): Promise<string | null> {
   try {
-    // Prefer Chinese name from TWSE for Taiwan stocks
     const code = fromYahooSymbol(symbol);
     if (symbol.endsWith('.TW') || symbol.endsWith('.TWO')) {
       const zhName = await fetchZhName(code);
@@ -343,12 +298,21 @@ export async function fetchStockData(
       fetchHistory(symbol, 65),
     ]);
     if (history.length < 20) return null;
-    // If real-time price is unavailable (blocked/after-hours), use last historical close
+
+    // For TW stocks the quote has no price yet — derive from last two history bars
     if (quote.regularMarketPrice === 0 && history.length > 0) {
-      const lastClose = history[history.length - 1].close;
-      quote.regularMarketPrice = lastClose;
-      if (quote.regularMarketPreviousClose === 0) quote.regularMarketPreviousClose = lastClose;
+      const last = history[history.length - 1];
+      const prev = history.length >= 2 ? history[history.length - 2] : last;
+      quote.regularMarketPrice    = last.close;
+      quote.regularMarketPreviousClose = prev.close;
+      quote.regularMarketVolume   = last.volume;
+      quote.regularMarketDayHigh  = last.high;
+      quote.regularMarketDayLow   = last.low;
+      quote.regularMarketOpen     = last.open;
+      quote.regularMarketChangePercent =
+        prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
     }
+
     return { quote, history };
   } catch {
     return null;
