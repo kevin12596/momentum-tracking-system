@@ -3,6 +3,7 @@
 // ============================================================
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { WatchlistStock, SectorGroup } from '../api/types';
 import { StockCard } from '../components/StockCard';
@@ -32,6 +33,7 @@ const ZONE_INACTIVE: Record<FilterZone, { color: string; bg: string; border: str
 };
 
 export function Watchlist() {
+  const navigate = useNavigate();
   const [stocks, setStocks] = useState<WatchlistStock[]>([]);
   const [sectors, setSectors] = useState<SectorGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +50,7 @@ export function Watchlist() {
 
   useEffect(() => { loadData().finally(() => setLoading(false)); }, []);
 
-  function handleAdded() { setShowForm(false); loadData(); }
+  function handleAdded(id: string) { setShowForm(false); navigate(`/watchlist/${id}`); }
 
   const filtered = stocks
     .filter((s) => {
