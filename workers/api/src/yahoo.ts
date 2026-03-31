@@ -76,6 +76,42 @@ async function fetchZhName(code: string): Promise<string | null> {
 }
 
 // -------------------------------------------------------
+// TWSE / TPEX real-time price (fallback when Yahoo quote fails)
+// mis.twse.com.tw — official exchange real-time data
+// -------------------------------------------------------
+
+interface TwseStockInfo {
+  z?: string;  // current price (or "-" before market open)
+  y?: string;  // yesterday close
+  h?: string;  // today high
+  l?: string;  // today low
+  o?: string;  // today open
+  v?: string;  // volume (lots)
+  n?: string;  // Chinese name
+}
+
+async function fetchTwsePrice(code: string, exchange: 'TSE' | 'OTC'): Promise<{ price: number; prevClose: number } | null> {
+  try {
+    const exPrefix = exchange === 'OTC' ? 'otc' : 'tse';
+    const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exPrefix}_${code}.tw&json=1&delay=0`;
+    const resp = await fetch(url, {
+      headers: { 'Referer': 'https://mis.twse.com.tw/', 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as { msgArray?: TwseStockInfo[]; rtmessage?: string };
+    const item = data.msgArray?.[0];
+    if (!item) return null;
+    const price = parseFloat(item.z ?? '') || 0;
+    const prevClose = parseFloat(item.y ?? '') || 0;
+    // z = "-" before market open, use prevClose in that case
+    return { price: price > 0 ? price : prevClose, prevClose };
+  } catch {
+    return null;
+  }
+}
+
+// -------------------------------------------------------
 // Price / quote fetch
 // -------------------------------------------------------
 
@@ -93,19 +129,42 @@ export interface QuoteResult {
 }
 
 export async function fetchQuote(symbol: string): Promise<QuoteResult> {
-  const result = await yf.quote(symbol);
+  // For Taiwan stocks (.TW / .TWO), try TWSE official API first.
+  // Yahoo Finance quote endpoint is sometimes blocked from cloud IPs.
+  let twsePrice: { price: number; prevClose: number } | null = null;
+  const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
+  if (isTW) {
+    const code = fromYahooSymbol(symbol);
+    const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
+    twsePrice = await fetchTwsePrice(code, exchange).catch(() => null);
+  }
+
+  // Try Yahoo quote (for non-TW symbols or when TWSE didn't return a name)
+  let yahooResult: Awaited<ReturnType<typeof yf.quote>> | null = null;
+  try {
+    yahooResult = await yf.quote(symbol);
+  } catch {
+    // Yahoo blocked or failed — use TWSE data only
+  }
+
+  const regularMarketPrice =
+    twsePrice?.price ||
+    yahooResult?.regularMarketPrice ||
+    yahooResult?.regularMarketPreviousClose ||
+    twsePrice?.prevClose ||
+    0;
 
   return {
-    symbol: result.symbol,
-    shortName: result.shortName ?? symbol,
-    longName: result.longName ?? undefined,
-    regularMarketPrice: result.regularMarketPrice || result.regularMarketPreviousClose || 0,
-    regularMarketOpen: result.regularMarketOpen ?? 0,
-    regularMarketDayHigh: result.regularMarketDayHigh ?? 0,
-    regularMarketDayLow: result.regularMarketDayLow ?? 0,
-    regularMarketPreviousClose: result.regularMarketPreviousClose ?? 0,
-    regularMarketVolume: result.regularMarketVolume ?? 0,
-    regularMarketChangePercent: result.regularMarketChangePercent ?? 0,
+    symbol: yahooResult?.symbol ?? symbol,
+    shortName: yahooResult?.shortName ?? symbol,
+    longName: yahooResult?.longName ?? undefined,
+    regularMarketPrice,
+    regularMarketOpen: yahooResult?.regularMarketOpen ?? 0,
+    regularMarketDayHigh: yahooResult?.regularMarketDayHigh ?? 0,
+    regularMarketDayLow: yahooResult?.regularMarketDayLow ?? 0,
+    regularMarketPreviousClose: yahooResult?.regularMarketPreviousClose ?? twsePrice?.prevClose ?? 0,
+    regularMarketVolume: yahooResult?.regularMarketVolume ?? 0,
+    regularMarketChangePercent: yahooResult?.regularMarketChangePercent ?? 0,
   };
 }
 
