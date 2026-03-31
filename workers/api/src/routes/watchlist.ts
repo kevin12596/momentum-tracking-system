@@ -151,9 +151,10 @@ export async function handleWatchlist(request: Request, env: Env): Promise<Respo
       review_after: null,
     });
 
-    // Fire-and-forget: enrichment + immediate 60-day scan
+    // Await the 60-day scan so the response already has current_price + zone data.
+    // Enrichment is still fire-and-forget (slower AI call).
+    await quickScan(id, yahooSym, env.DB);
     enrichConceptTags(id, yahooSym, name, env).catch(console.error);
-    quickScan(id, yahooSym, env.DB).catch(console.error);
 
     const stock = await getWatchlistById(env.DB, id);
     return json(stock, 201);

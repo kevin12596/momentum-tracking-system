@@ -111,8 +111,8 @@ export async function writebackIndicators(
   await db
     .prepare(
       `UPDATE watchlist SET
-        current_price = ?,
-        price_updated_at = datetime('now'),
+        current_price = CASE WHEN ? > 0 THEN ? ELSE current_price END,
+        price_updated_at = CASE WHEN ? > 0 THEN datetime('now') ELSE price_updated_at END,
         day60_high = ?,
         day60_low = ?,
         day60_high_date = ?,
@@ -125,7 +125,9 @@ export async function writebackIndicators(
       WHERE id = ?`
     )
     .bind(
-      ind.currentPrice,
+      ind.currentPrice, // CASE check
+      ind.currentPrice, // CASE value
+      ind.currentPrice, // CASE check for price_updated_at
       ind.day60High,
       ind.day60Low,
       ind.day60HighDate,

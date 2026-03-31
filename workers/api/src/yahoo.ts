@@ -99,7 +99,7 @@ export async function fetchQuote(symbol: string): Promise<QuoteResult> {
     symbol: result.symbol,
     shortName: result.shortName ?? symbol,
     longName: result.longName ?? undefined,
-    regularMarketPrice: result.regularMarketPrice ?? 0,
+    regularMarketPrice: result.regularMarketPrice || result.regularMarketPreviousClose || 0,
     regularMarketOpen: result.regularMarketOpen ?? 0,
     regularMarketDayHigh: result.regularMarketDayHigh ?? 0,
     regularMarketDayLow: result.regularMarketDayLow ?? 0,
