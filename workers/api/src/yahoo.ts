@@ -182,29 +182,108 @@ export interface HistoricalBar {
   volume: number;
 }
 
+// TWSE/TPEX after-market daily data — used as fallback when Yahoo historical is blocked.
+// TSE:  twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=2330&date=20260301&response=json
+// OTC:  tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=115/03&stkno=3037&...
+async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: number): Promise<HistoricalBar[]> {
+  const bars: HistoricalBar[] = [];
+  const today = new Date();
+
+  for (let offset = 0; offset < 4 && bars.length < days; offset++) {
+    const d = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+    try {
+      let rows: string[][] = [];
+      if (exchange === 'TSE') {
+        const dateStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}01`;
+        const resp = await fetch(
+          `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=${code}&date=${dateStr}&response=json`,
+          { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) }
+        );
+        if (!resp.ok) continue;
+        const data = await resp.json() as { stat?: string; data?: string[][] };
+        if (data.stat !== 'OK' || !data.data) continue;
+        rows = data.data;
+      } else {
+        const rocYear = d.getFullYear() - 1911;
+        const mon = String(d.getMonth() + 1).padStart(2, '0');
+        const resp = await fetch(
+          `https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=${rocYear}/${mon}&stkno=${code}&s=0,asc,0&output=json`,
+          { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.tpex.org.tw/' }, signal: AbortSignal.timeout(6000) }
+        );
+        if (!resp.ok) continue;
+        const data = await resp.json() as { aaData?: string[][] };
+        if (!data.aaData) continue;
+        rows = data.aaData;
+      }
+
+      // Rows are oldest-first; insert at front so final array is chronological
+      const monthBars: HistoricalBar[] = [];
+      for (const row of rows) {
+        // Date: "115/03/03" (ROC) → convert year
+        const parts = row[0].split('/');
+        if (parts.length < 3) continue;
+        const year = parseInt(parts[0]) + 1911;
+        const month = parseInt(parts[1]);
+        const day = parseInt(parts[2]);
+        const open  = parseFloat(row[3].replace(/,/g, '')) || 0;
+        const high  = parseFloat(row[4].replace(/,/g, '')) || 0;
+        const low   = parseFloat(row[5].replace(/,/g, '')) || 0;
+        const close = parseFloat(row[6].replace(/,/g, '')) || 0;
+        const vol   = parseInt(row[1].replace(/,/g, ''), 10) || 0;
+        if (close > 0) {
+          monthBars.push({ date: new Date(year, month - 1, day), open, high, low, close, adjClose: close, volume: vol });
+        }
+      }
+      // Prepend this month's bars (older months added in later iterations)
+      bars.unshift(...monthBars);
+    } catch {
+      // Skip failed month
+    }
+  }
+
+  return bars.slice(-days);
+}
+
 export async function fetchHistory(symbol: string, days: number = 65): Promise<HistoricalBar[]> {
-  const period1 = new Date();
-  period1.setDate(period1.getDate() - days);
+  // Try Yahoo Finance first
+  try {
+    const period1 = new Date();
+    period1.setDate(period1.getDate() - days);
 
-  const results = await yf.historical(symbol, {
-    period1: period1.toISOString().slice(0, 10),
-    interval: '1d',
-    events: 'history',
-    includeAdjustedClose: true,
-  });
+    const results = await yf.historical(symbol, {
+      period1: period1.toISOString().slice(0, 10),
+      interval: '1d',
+      events: 'history',
+      includeAdjustedClose: true,
+    });
 
-  return results
-    .filter((r) => r.close != null && r.volume != null)
-    .map((r) => ({
-      date: r.date,
-      open: r.open ?? r.close,
-      high: r.high ?? r.close,
-      low: r.low ?? r.close,
-      close: r.adjClose ?? r.close,
-      adjClose: r.adjClose ?? r.close,
-      volume: r.volume ?? 0,
-    }))
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
+    const bars = results
+      .filter((r) => r.close != null && r.volume != null)
+      .map((r) => ({
+        date: r.date,
+        open: r.open ?? r.close,
+        high: r.high ?? r.close,
+        low: r.low ?? r.close,
+        close: r.adjClose ?? r.close,
+        adjClose: r.adjClose ?? r.close,
+        volume: r.volume ?? 0,
+      }))
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    if (bars.length >= 20) return bars;
+  } catch {
+    // Yahoo historical blocked or failed — fall through to TWSE
+  }
+
+  // TWSE fallback for Taiwan stocks
+  const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
+  if (isTW) {
+    const code = fromYahooSymbol(symbol);
+    const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
+    return fetchTwseHistory(code, exchange, days);
+  }
+
+  return [];
 }
 
 // -------------------------------------------------------
