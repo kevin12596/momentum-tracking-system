@@ -326,7 +326,17 @@ async function processStock(
 
   // ③ Watch zone entry
   if (triggers.watchZoneEntry) {
-    const msg = `👀 觀察帶提醒\n${stock.name}（${stock.symbol.replace(/\.(TW|TWO)$/, '')}）\n現價 NT$${ind.currentPrice.toFixed(0)}，回測 ${ind.pullbackPct.toFixed(1)}%，進入觀察帶`;
+    const _shortCode = stock.symbol.replace(/\.(TW|TWO)$/, '');
+    const _watchPct  = stock.pullback_watch_pct  ?? 8;
+    const _idealPct  = stock.pullback_ideal_pct  ?? 13;
+    const _maxPct    = stock.pullback_max_pct    ?? 20;
+    const _idealHigh = stock.day60_high ? stock.day60_high * (1 - _watchPct  / 100) : null;
+    const _idealLow  = stock.day60_high ? stock.day60_high * (1 - _idealPct  / 100) : null;
+    const _maxPrice  = stock.day60_high ? stock.day60_high * (1 - _maxPct    / 100) : null;
+    const _zoneLines = _idealHigh && _idealLow && _maxPrice
+      ? `\n理想買入帶：NT$${_idealLow.toFixed(0)}–${_idealHigh.toFixed(0)}（回測 ${_idealPct}%–${_watchPct}%）\n最大容忍：NT$${_maxPrice.toFixed(0)}（回測 ${_maxPct}%）`
+      : '';
+    const msg = `👀 觀察帶提醒\n${stock.name}（${_shortCode}）\n現價 NT$${ind.currentPrice.toFixed(0)}，回測 ${ind.pullbackPct.toFixed(1)}%，進入觀察帶${_zoneLines}`;
     const sent = await sendNotification(msg, 'PULLBACK_WATCH', stock, env);
     if (sent) {
       await updateLastNotified(env.DB, stock.id);
