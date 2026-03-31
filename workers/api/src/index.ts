@@ -68,12 +68,30 @@ export default {
     if (path.startsWith('/api/market-state')) return handleMarket(request, env);
     if (path === '/webhook/line') return handleLineWebhook(request, env);
 
-    // Manual scan trigger (no auth needed — Worker is already behind Cloudflare)
+    // Manual scan trigger — runs synchronously and returns summary
     if (path === '/api/scan' && request.method === 'POST') {
-      ctx.waitUntil(runPriceMonitor(env).catch(console.error));
-      return new Response(JSON.stringify({ status: 'scan triggered', time: new Date().toISOString() }), {
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      });
+      try {
+        const before = Date.now();
+        await runPriceMonitor(env);
+        const elapsed = Date.now() - before;
+        // Return updated prices after scan
+        const stocks = await getActiveWatchlist(env.DB);
+        const withPrice = stocks.filter(s => s.current_price && s.current_price > 0).length;
+        return new Response(JSON.stringify({
+          status: 'ok',
+          elapsed_ms: elapsed,
+          total: stocks.length,
+          with_price: withPrice,
+          time: new Date().toISOString(),
+        }), {
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ status: 'error', message: String(e) }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        });
+      }
     }
 
     return new Response(JSON.stringify({ status: 'momentum-api running' }), {
