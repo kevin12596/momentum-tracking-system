@@ -212,6 +212,38 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
   return allBars.slice(-days);
 }
 
+// Stooq.com CSV download — reliable Taiwan stock fallback, no auth needed
+// URL format: https://stooq.com/q/d/l/?s=2313.tw&i=d
+async function fetchStooqHistory(code: string, days: number): Promise<HistoricalBar[]> {
+  try {
+    const resp = await fetch(
+      `https://stooq.com/q/d/l/?s=${code.toLowerCase()}.tw&i=d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!resp.ok) return [];
+    const csv = await resp.text();
+    if (!csv.includes(',')) return [];
+    const lines = csv.trim().split('\n');
+    if (lines.length < 2) return [];
+    const bars: HistoricalBar[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(',');
+      if (parts.length < 5) continue;
+      const date = new Date(parts[0]);
+      const open  = parseFloat(parts[1]);
+      const high  = parseFloat(parts[2]);
+      const low   = parseFloat(parts[3]);
+      const close = parseFloat(parts[4]);
+      const vol   = parseInt(parts[5] ?? '0', 10) || 0;
+      if (isNaN(date.getTime()) || close <= 0) continue;
+      bars.push({ date, open: open || close, high: high || close, low: low || close, close, adjClose: close, volume: vol });
+    }
+    return bars.sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-days);
+  } catch {
+    return [];
+  }
+}
+
 async function fetchYahooChartDirect(symbol: string, days: number): Promise<HistoricalBar[] | null> {
   try {
     const range = days <= 30 ? '1mo' : days <= 90 ? '3mo' : '6mo';
@@ -267,7 +299,10 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     const altExchange: 'TSE' | 'OTC' = exchange === 'OTC' ? 'TSE' : 'OTC';
     const altBars = await fetchTwseHistory(code, altExchange, days);
     if (altBars.length >= 20) return altBars;
-    // Fallback 2: Yahoo historical (may work via different CDN path)
+    // Fallback 2: stooq.com CSV (reliable, no rate-limit, no auth)
+    const stooqBars = await fetchStooqHistory(code, days);
+    if (stooqBars.length >= 5) return stooqBars;
+    // Fallback 3: Yahoo historical (may work via different CDN path)
     try {
       const period1 = new Date();
       period1.setDate(period1.getDate() - days);
@@ -275,7 +310,7 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
       const yBars = results.filter(r => r.close != null).map(r => ({ date: r.date, open: r.open ?? r.close, high: r.high ?? r.close, low: r.low ?? r.close, close: r.adjClose ?? r.close, adjClose: r.adjClose ?? r.close, volume: r.volume ?? 0 })).sort((a, b) => a.date.getTime() - b.date.getTime());
       if (yBars.length >= 5) return yBars;
     } catch { /* blocked */ }
-    // Fallback 3: direct Yahoo chart HTTP (bypasses library)
+    // Fallback 4: direct Yahoo chart HTTP (bypasses library)
     const directBars = await fetchYahooChartDirect(symbol, days);
     if (directBars && directBars.length >= 5) return directBars;
     // Return best available
