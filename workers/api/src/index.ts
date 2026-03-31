@@ -68,6 +68,31 @@ export default {
     if (path.startsWith('/api/market-state')) return handleMarket(request, env);
     if (path === '/webhook/line') return handleLineWebhook(request, env);
 
+    // Debug: test Yahoo Finance quote for a single stock
+    if (path === '/api/debug' && request.method === 'GET') {
+      const sym = url.searchParams.get('symbol') ?? '2330.TW';
+      try {
+        const { fetchQuote, fetchHistory } = await import('./yahoo');
+        const [quote, history] = await Promise.all([
+          fetchQuote(sym).catch((e: unknown) => ({ error: String(e) })),
+          fetchHistory(sym, 10).catch((e: unknown) => []),
+        ]);
+        return new Response(JSON.stringify({
+          symbol: sym,
+          quote,
+          history_bars: Array.isArray(history) ? history.length : 0,
+          last_close: Array.isArray(history) && history.length > 0 ? history[history.length - 1].close : null,
+        }, null, 2), {
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        });
+      }
+    }
+
     // Manual scan trigger — runs synchronously and returns summary
     if (path === '/api/scan' && request.method === 'POST') {
       try {
