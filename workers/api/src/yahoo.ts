@@ -263,9 +263,22 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
     const bars = await fetchTwseHistory(code, exchange, days);
     if (bars.length >= 20) return bars;
-    // Fallback: try the other exchange (handles mis-classified stocks)
+    // Fallback 1: try the other exchange (handles mis-classified stocks)
     const altExchange: 'TSE' | 'OTC' = exchange === 'OTC' ? 'TSE' : 'OTC';
     const altBars = await fetchTwseHistory(code, altExchange, days);
+    if (altBars.length >= 20) return altBars;
+    // Fallback 2: Yahoo historical (may work via different CDN path)
+    try {
+      const period1 = new Date();
+      period1.setDate(period1.getDate() - days);
+      const results = await yf.historical(symbol, { period1: period1.toISOString().slice(0, 10), interval: '1d', events: 'history', includeAdjustedClose: true });
+      const yBars = results.filter(r => r.close != null).map(r => ({ date: r.date, open: r.open ?? r.close, high: r.high ?? r.close, low: r.low ?? r.close, close: r.adjClose ?? r.close, adjClose: r.adjClose ?? r.close, volume: r.volume ?? 0 })).sort((a, b) => a.date.getTime() - b.date.getTime());
+      if (yBars.length >= 5) return yBars;
+    } catch { /* blocked */ }
+    // Fallback 3: direct Yahoo chart HTTP (bypasses library)
+    const directBars = await fetchYahooChartDirect(symbol, days);
+    if (directBars && directBars.length >= 5) return directBars;
+    // Return best available
     return altBars.length > bars.length ? altBars : bars;
   }
 
@@ -293,17 +306,29 @@ export interface TaiexData {
 }
 
 export async function fetchTaiex(): Promise<TaiexData | null> {
+  // Try Yahoo Finance for ^TWII first
   try {
     const history = await fetchHistory('^TWII', 25);
-    if (history.length < 2) return null;
-    const closes = history.map(h => h.close);
-    const last = closes[closes.length - 1];
-    const prev = closes[closes.length - 2];
-    const dailyChangePct = prev > 0 ? ((last - prev) / prev) * 100 : 0;
-    return { close: last, dailyChangePct, closes };
-  } catch {
-    return null;
-  }
+    if (history.length >= 2) {
+      const closes = history.map(h => h.close);
+      const last = closes[closes.length - 1];
+      const prev = closes[closes.length - 2];
+      return { close: last, dailyChangePct: prev > 0 ? ((last - prev) / prev) * 100 : 0, closes };
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: 元大台灣50 ETF (0050.TW) closely tracks TAIEX (~99% correlation)
+  try {
+    const history = await fetchHistory('0050.TW', 25);
+    if (history.length >= 2) {
+      const closes = history.map(h => h.close);
+      const last = closes[closes.length - 1];
+      const prev = closes[closes.length - 2];
+      return { close: last, dailyChangePct: prev > 0 ? ((last - prev) / prev) * 100 : 0, closes };
+    }
+  } catch { /* give up */ }
+
+  return null;
 }
 
 // -------------------------------------------------------
