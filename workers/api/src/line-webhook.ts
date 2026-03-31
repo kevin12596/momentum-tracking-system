@@ -18,7 +18,8 @@ import { enrichConceptTags } from './claude';
 // -------------------------------------------------------
 
 const PATTERNS = {
-  add: /^新增\s+(\d{4,6})(?:\s+(\d+))?(?:\s+(?:高點|高價)[:：]?\s*(\d+(?:\.\d+)?))?$/,
+  // 新增 CODE [IDEAL%] [HIGH_PRICE] [NOTES/TAG...]
+  add: /^新增\s+(\d{4,6})(?:\s+(\d+))?(?:\s+(\d+(?:\.\d+)?))?(?:\s+(.+))?$/,
   remove: /^刪除\s+(\d{4,6})$/,
   pause: /^暫停\s+(\d{4,6})$/,
   list: /^清單$/,
@@ -79,7 +80,8 @@ async function handleAdd(
   idealPct: string | undefined,
   replyToken: string,
   env: Env,
-  highRef?: string
+  highRef?: string,
+  notes?: string
 ): Promise<void> {
   // Try TSE first
   let exchange: 'TSE' | 'OTC' = 'TSE';
@@ -126,7 +128,7 @@ async function handleAdd(
     pullback_watch_pct: 8.0,
     pullback_ideal_pct,
     pullback_max_pct: 20.0,
-    notes: null,
+    notes: notes ?? null,
     notify_cooldown_hrs: 4,
     industry: null, concept_tags: null, ai_summary: null, tags_updated_at: null,
     current_price: priceAtAdd, price_updated_at: null,
@@ -142,10 +144,12 @@ async function handleAdd(
   enrichConceptTags(id, yahooSym, name, env).catch(console.error);
 
   const priceStr = priceAtAdd ? `現價 NT$${priceAtAdd.toFixed(0)}` : '';
-  const highStr = high_ref_price ? `\n參考高點：NT$${high_ref_price.toFixed(0)}` : '\n（高點將由系統自動抓取60日高點）';
+  const highStr = high_ref_price ? `參考高點：NT$${high_ref_price.toFixed(0)}` : '高點：系統自動抓取60日高點';
+  const notesStr = notes ? `備註：${notes}` : '';
   await replyLine(
     replyToken,
-    `✅ 已新增追蹤：${name}（${code}）\n${priceStr}\n理想買入回測：${pullback_ideal_pct}%${highStr}\n正在分析族群標籤...`,
+    [`✅ 已新增追蹤：${name}（${code}）`, priceStr, `理想買入回測：${pullback_ideal_pct}%`, highStr, notesStr]
+      .filter(Boolean).join('\n'),
     env,
     [
       { type: 'action', action: { type: 'message', label: '📋 查看清單', text: '清單' } },
@@ -304,7 +308,7 @@ export async function handleLineWebhook(request: Request, env: Env): Promise<Res
     matched = true;
     await replyLine(
       replyToken,
-      '👇 請選擇功能，或直接輸入指令：\n\n• 新增 XXXX [回測%] [高點:PRICE]\n  例：新增 2330 15 高點:600\n• 狀態 XXXX\n• 清單\n• 暫停 XXXX\n• 刪除 XXXX',
+      '👇 請選擇功能，或直接輸入指令：\n\n• 新增 代號 [回測%] [高點價格] [標籤]\n  例：新增 2330 15 600 封測\n• 狀態 XXXX\n• 清單\n• 暫停 XXXX\n• 刪除 XXXX',
       env,
       MAIN_MENU
     );
@@ -315,7 +319,7 @@ export async function handleLineWebhook(request: Request, env: Env): Promise<Res
     const addMatch = text.match(PATTERNS.add);
     if (addMatch) {
       matched = true;
-      await handleAdd(addMatch[1], addMatch[2], replyToken, env, addMatch[3]);
+      await handleAdd(addMatch[1], addMatch[2], replyToken, env, addMatch[3], addMatch[4]);
     }
   }
 
