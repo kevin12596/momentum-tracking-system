@@ -68,6 +68,14 @@ export default {
     if (path.startsWith('/api/market-state')) return handleMarket(request, env);
     if (path === '/webhook/line') return handleLineWebhook(request, env);
 
+    // Manual scan trigger (no auth needed — Worker is already behind Cloudflare)
+    if (path === '/api/scan' && request.method === 'POST') {
+      ctx.waitUntil(runPriceMonitor(env).catch(console.error));
+      return new Response(JSON.stringify({ status: 'scan triggered', time: new Date().toISOString() }), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
+    }
+
     return new Response(JSON.stringify({ status: 'momentum-api running' }), {
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
