@@ -27,12 +27,22 @@ export function WatchlistDetail() {
   const [loading, setLoading] = useState(true);
   const [editNotes, setEditNotes] = useState('');
   const [editHighRef, setEditHighRef] = useState('');
+  const [editWatchPct, setEditWatchPct] = useState('');
+  const [editIdealPct, setEditIdealPct] = useState('');
+  const [editMaxPct, setEditMaxPct] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     api.watchlist.get(id)
-      .then((s) => { setStock(s); setEditNotes(s.notes ?? ''); setEditHighRef(s.high_ref_price?.toString() ?? ''); })
+      .then((s) => {
+        setStock(s);
+        setEditNotes(s.notes ?? '');
+        setEditHighRef(s.high_ref_price?.toString() ?? '');
+        setEditWatchPct(String(s.pullback_watch_pct));
+        setEditIdealPct(String(s.pullback_ideal_pct));
+        setEditMaxPct(String(s.pullback_max_pct));
+      })
       .catch(() => navigate('/watchlist'))
       .finally(() => setLoading(false));
   }, [id, navigate]);
@@ -44,6 +54,9 @@ export function WatchlistDetail() {
       const updated = await api.watchlist.update(stock.id, {
         notes: editNotes || undefined,
         high_ref_price: editHighRef ? parseFloat(editHighRef) : undefined,
+        pullback_watch_pct: parseFloat(editWatchPct) || stock.pullback_watch_pct,
+        pullback_ideal_pct: parseFloat(editIdealPct) || stock.pullback_ideal_pct,
+        pullback_max_pct: parseFloat(editMaxPct) || stock.pullback_max_pct,
       });
       setStock(updated);
     } finally { setSaving(false); }
@@ -168,9 +181,18 @@ export function WatchlistDetail() {
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: 16, marginBottom: 14, boxShadow: 'var(--shadow-sm)' }}>
         <SectionTitle>回測設定</SectionTitle>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 14 }}>
-          <StatRow label="開始留意" value={`−${stock.pullback_watch_pct}%`} />
-          <StatRow label="理想買入" value={`−${stock.pullback_ideal_pct}%`} valueColor="var(--green)" />
-          <StatRow label="極限容忍" value={`−${stock.pullback_max_pct}%`} valueColor="var(--red)" />
+          <div>
+            <label style={{ ...labelStyle, fontSize: 11, color: 'var(--text-3)' }}>開始留意 %</label>
+            <input style={inputStyle} type="number" value={editWatchPct} onChange={(e) => setEditWatchPct(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ ...labelStyle, fontSize: 11, color: 'var(--green)' }}>理想買入 %</label>
+            <input style={inputStyle} type="number" value={editIdealPct} onChange={(e) => setEditIdealPct(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ ...labelStyle, fontSize: 11, color: 'var(--red)' }}>極限容忍 %</label>
+            <input style={inputStyle} type="number" value={editMaxPct} onChange={(e) => setEditMaxPct(e.target.value)} />
+          </div>
         </div>
 
         <div style={{ marginBottom: 10 }}>

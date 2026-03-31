@@ -100,9 +100,11 @@ export function Dashboard() {
         />
         <StatCard
           label="市場波動度"
-          value={marketState.volatility_mode === 'HIGH' ? '⚠ 高波動' : '✓ 正常'}
-          valueColor={marketState.volatility_mode === 'HIGH' ? C.red : C.green}
-          sub={marketState.volatility_mode === 'HIGH'
+          value={marketState.atr20 == null ? '─ 無資料' : marketState.volatility_mode === 'HIGH' ? '⚠ 高波動' : '✓ 正常'}
+          valueColor={marketState.atr20 == null ? C.text3 : marketState.volatility_mode === 'HIGH' ? C.red : C.green}
+          sub={marketState.atr20 == null
+            ? '大盤資料暫時無法取得'
+            : marketState.volatility_mode === 'HIGH'
             ? '回測區間自動擴大 ×1.2'
             : '使用標準回測區間'}
         />
