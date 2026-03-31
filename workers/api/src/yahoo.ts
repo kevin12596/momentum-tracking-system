@@ -162,7 +162,7 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
           const dateStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}01`;
           const resp = await fetch(
             `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=${code}&date=${dateStr}&response=json`,
-            { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
+            { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.twse.com.tw/' }, signal: AbortSignal.timeout(8000) }
           );
           if (!resp.ok) return [];
           const data = await resp.json() as { stat?: string; data?: string[][] };
@@ -259,10 +259,14 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
   const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
 
   if (isTW) {
-    // Use official TWSE/TPEX after-market data directly (no Yahoo for TW stocks)
     const code = fromYahooSymbol(symbol);
     const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
-    return fetchTwseHistory(code, exchange, days);
+    const bars = await fetchTwseHistory(code, exchange, days);
+    if (bars.length >= 20) return bars;
+    // Fallback: try the other exchange (handles mis-classified stocks)
+    const altExchange: 'TSE' | 'OTC' = exchange === 'OTC' ? 'TSE' : 'OTC';
+    const altBars = await fetchTwseHistory(code, altExchange, days);
+    return altBars.length > bars.length ? altBars : bars;
   }
 
   // Non-TW: try yahoo-finance2, then direct HTTP chart API

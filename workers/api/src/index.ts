@@ -202,6 +202,8 @@ async function runPriceMonitor(env: Env): Promise<void> {
     } catch (err) {
       console.error(`Failed to process ${stock.symbol}:`, err);
     }
+    // Brief pause between stocks to avoid TWSE/TPEX rate limiting
+    await new Promise(r => setTimeout(r, 300));
   }
 
   // ④ Weekly Monday enrichment refresh
