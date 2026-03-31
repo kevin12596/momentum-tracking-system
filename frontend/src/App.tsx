@@ -1,8 +1,10 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { useState } from 'react';
 import { Dashboard } from './pages/Dashboard';
 import { Watchlist } from './pages/Watchlist';
 import { WatchlistDetail } from './pages/WatchlistDetail';
 import { Sectors } from './pages/Sectors';
+import { api } from './api/client';
 
 const navItems = [
   { to: '/',          label: '總覽',    end: true  },
@@ -11,6 +13,27 @@ const navItems = [
 ];
 
 export default function App() {
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState('');
+
+  async function handleScan() {
+    setScanning(true);
+    setScanMsg('');
+    try {
+      const result = await api.scan();
+      if (result.status === 'ok') {
+        setScanMsg(`✓ 已更新 ${result.with_price}/${result.total} 支`);
+      } else {
+        setScanMsg('更新失敗');
+      }
+    } catch {
+      setScanMsg('連線失敗');
+    } finally {
+      setScanning(false);
+      setTimeout(() => setScanMsg(''), 4000);
+    }
+  }
+
   return (
     <BrowserRouter>
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
@@ -61,10 +84,36 @@ export default function App() {
             ))}
           </div>
 
-          {/* Right side hint */}
-          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-            台股 09:00–13:30 自動掃描
+          {/* Right side: scan button + hint */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {scanMsg && (
+              <span style={{ fontSize: 12, color: scanning ? 'var(--text-3)' : 'var(--green)', fontWeight: 500 }}>
+                {scanMsg}
+              </span>
+            )}
+            <button
+              onClick={handleScan}
+              disabled={scanning}
+              title="手動更新所有股票現價"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '5px 12px', borderRadius: 'var(--radius)',
+                border: '1px solid var(--border)',
+                background: scanning ? 'var(--surface-2)' : 'var(--surface)',
+                color: scanning ? 'var(--text-3)' : 'var(--text-2)',
+                fontSize: 12, fontWeight: 500, cursor: scanning ? 'not-allowed' : 'pointer',
+                transition: 'all .15s',
+              }}
+            >
+              <span style={{
+                display: 'inline-block',
+                animation: scanning ? 'spin 1s linear infinite' : 'none',
+              }}>↻</span>
+              {scanning ? '更新中...' : '更新股價'}
+            </button>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>台股 09:00–13:30 自動掃描</span>
           </div>
+          <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
         </nav>
 
         {/* Main content */}

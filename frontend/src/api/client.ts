@@ -98,4 +98,10 @@ export const api = {
       return request<MarketState>('/market-state');
     },
   },
+
+  scan(): Promise<{ status: string; total: number; with_price: number; elapsed_ms: number }> {
+    // BASE points to /api — scan endpoint is one level up
+    const scanUrl = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/api$/, '') + '/api/scan';
+    return fetch(scanUrl, { method: 'POST' }).then(r => r.json());
+  },
 };
