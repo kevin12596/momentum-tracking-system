@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { api } from '../api/client';
 import type { AddStockPayload } from '../api/types';
 
-interface Props { onAdded: () => void; onCancel: () => void; }
+interface Props { onAdded: (id: string) => void; onCancel: () => void; }
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '8px 12px',
@@ -61,7 +61,7 @@ export function AddStockForm({ onAdded, onCancel }: Props) {
     if (resolvedName) payload.name = resolvedName;
     if (highRefPrice) payload.high_ref_price = parseFloat(highRefPrice);
     if (highRefDate) payload.high_ref_date = highRefDate;
-    try { await api.watchlist.add(payload); onAdded(); }
+    try { const stock = await api.watchlist.add(payload); onAdded(stock.id); }
     catch (e: unknown) { setSubmitError((e as Error).message ?? '新增失敗'); }
     finally { setSubmitLoading(false); }
   }

@@ -151,60 +151,108 @@ export interface HistoricalBar {
 // TSE:  twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=2330&date=20260301&response=json
 // OTC:  tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=115/03&stkno=3037&...
 async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: number): Promise<HistoricalBar[]> {
-  const bars: HistoricalBar[] = [];
   const today = new Date();
 
-  for (let offset = 0; offset < 4 && bars.length < days; offset++) {
-    const d = new Date(today.getFullYear(), today.getMonth() - offset, 1);
-    try {
-      let rows: string[][] = [];
-      if (exchange === 'TSE') {
-        const dateStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}01`;
-        const resp = await fetch(
-          `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=${code}&date=${dateStr}&response=json`,
-          { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) }
-        );
-        if (!resp.ok) continue;
-        const data = await resp.json() as { stat?: string; data?: string[][] };
-        if (data.stat !== 'OK' || !data.data) continue;
-        rows = data.data;
-      } else {
-        const rocYear = d.getFullYear() - 1911;
-        const mon = String(d.getMonth() + 1).padStart(2, '0');
-        const resp = await fetch(
-          `https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=${rocYear}/${mon}&stkno=${code}&s=0,asc,0&output=json`,
-          { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.tpex.org.tw/' }, signal: AbortSignal.timeout(6000) }
-        );
-        if (!resp.ok) continue;
-        const data = await resp.json() as { aaData?: string[][] };
-        if (!data.aaData) continue;
-        rows = data.aaData;
-      }
-
-      const monthBars: HistoricalBar[] = [];
-      for (const row of rows) {
-        // Date: "115/03/03" (ROC calendar) → Gregorian
-        const parts = row[0].split('/');
-        if (parts.length < 3) continue;
-        const year  = parseInt(parts[0]) + 1911;
-        const month = parseInt(parts[1]);
-        const day   = parseInt(parts[2]);
-        const open  = parseFloat(row[3].replace(/,/g, '')) || 0;
-        const high  = parseFloat(row[4].replace(/,/g, '')) || 0;
-        const low   = parseFloat(row[5].replace(/,/g, '')) || 0;
-        const close = parseFloat(row[6].replace(/,/g, '')) || 0;
-        const vol   = parseInt(row[1].replace(/,/g, ''), 10) || 0;
-        if (close > 0) {
-          monthBars.push({ date: new Date(year, month - 1, day), open, high, low, close, adjClose: close, volume: vol });
+  const monthBarsResults = await Promise.all(
+    [0, 1, 2, 3].map(async (offset): Promise<HistoricalBar[]> => {
+      const d = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+      try {
+        let rows: string[][] = [];
+        if (exchange === 'TSE') {
+          const dateStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}01`;
+          const resp = await fetch(
+            `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=${code}&date=${dateStr}&response=json`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
+          );
+          if (!resp.ok) return [];
+          const data = await resp.json() as { stat?: string; data?: string[][] };
+          if (data.stat !== 'OK' || !data.data) return [];
+          rows = data.data;
+        } else {
+          const rocYear = d.getFullYear() - 1911;
+          const mon = String(d.getMonth() + 1).padStart(2, '0');
+          const resp = await fetch(
+            `https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=${rocYear}/${mon}&stkno=${code}&s=0,asc,0&output=json`,
+            { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.tpex.org.tw/' }, signal: AbortSignal.timeout(8000) }
+          );
+          if (!resp.ok) return [];
+          const data = await resp.json() as { aaData?: string[][] };
+          if (!data.aaData) return [];
+          rows = data.aaData;
         }
-      }
-      bars.unshift(...monthBars);
-    } catch {
-      // Skip failed month, try next
-    }
-  }
 
-  return bars.slice(-days);
+        const parsed: HistoricalBar[] = [];
+        for (const row of rows) {
+          const parts = row[0].split('/');
+          if (parts.length < 3) continue;
+          const year  = parseInt(parts[0]) + 1911;
+          const month = parseInt(parts[1]);
+          const day   = parseInt(parts[2]);
+          const open  = parseFloat(row[3].replace(/,/g, '')) || 0;
+          const high  = parseFloat(row[4].replace(/,/g, '')) || 0;
+          const low   = parseFloat(row[5].replace(/,/g, '')) || 0;
+          const close = parseFloat(row[6].replace(/,/g, '')) || 0;
+          const vol   = parseInt(row[1].replace(/,/g, ''), 10) || 0;
+          if (close > 0) {
+            parsed.push({ date: new Date(year, month - 1, day), open, high, low, close, adjClose: close, volume: vol });
+          }
+        }
+        return parsed;
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  // monthBarsResults[0] = current month, [1] = prev, [2] = 2 months ago, [3] = 3 months ago
+  // Reverse to get chronological order (oldest first), then flatten
+  const allBars = monthBarsResults.reverse().flat();
+  allBars.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  return allBars.slice(-days);
+}
+
+async function fetchYahooChartDirect(symbol: string, days: number): Promise<HistoricalBar[] | null> {
+  try {
+    const range = days <= 30 ? '1mo' : days <= 90 ? '3mo' : '6mo';
+    const resp = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=${range}`,
+      {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json() as {
+      chart?: {
+        result?: Array<{
+          timestamp?: number[];
+          indicators?: {
+            quote?: Array<{ open?: number[]; high?: number[]; low?: number[]; close?: number[]; volume?: number[] }>;
+            adjclose?: Array<{ adjclose?: number[] }>;
+          };
+        }>;
+      };
+    };
+    const result = data.chart?.result?.[0];
+    if (!result?.timestamp) return null;
+    const q = result.indicators?.quote?.[0];
+    const adj = result.indicators?.adjclose?.[0]?.adjclose;
+    if (!q) return null;
+    return result.timestamp
+      .map((ts, i) => ({
+        date: new Date(ts * 1000),
+        open: q.open?.[i] ?? 0,
+        high: q.high?.[i] ?? 0,
+        low: q.low?.[i] ?? 0,
+        close: adj?.[i] ?? q.close?.[i] ?? 0,
+        adjClose: adj?.[i] ?? q.close?.[i] ?? 0,
+        volume: q.volume?.[i] ?? 0,
+      }))
+      .filter(b => b.close > 0);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchHistory(symbol: string, days: number = 65): Promise<HistoricalBar[]> {
@@ -217,29 +265,17 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     return fetchTwseHistory(code, exchange, days);
   }
 
-  // Non-TW: use Yahoo historical
-  const period1 = new Date();
-  period1.setDate(period1.getDate() - days);
+  // Non-TW: try yahoo-finance2, then direct HTTP chart API
+  try {
+    const period1 = new Date();
+    period1.setDate(period1.getDate() - days);
+    const results = await yf.historical(symbol, { period1: period1.toISOString().slice(0, 10), interval: '1d', events: 'history', includeAdjustedClose: true });
+    const bars = results.filter(r => r.close != null && r.volume != null).map(r => ({ date: r.date, open: r.open ?? r.close, high: r.high ?? r.close, low: r.low ?? r.close, close: r.adjClose ?? r.close, adjClose: r.adjClose ?? r.close, volume: r.volume ?? 0 })).sort((a, b) => a.date.getTime() - b.date.getTime());
+    if (bars.length >= 5) return bars;
+  } catch { /* fall through */ }
 
-  const results = await yf.historical(symbol, {
-    period1: period1.toISOString().slice(0, 10),
-    interval: '1d',
-    events: 'history',
-    includeAdjustedClose: true,
-  });
-
-  return results
-    .filter((r) => r.close != null && r.volume != null)
-    .map((r) => ({
-      date: r.date,
-      open: r.open ?? r.close,
-      high: r.high ?? r.close,
-      low: r.low ?? r.close,
-      close: r.adjClose ?? r.close,
-      adjClose: r.adjClose ?? r.close,
-      volume: r.volume ?? 0,
-    }))
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const directBars = await fetchYahooChartDirect(symbol, days);
+  return directBars ?? [];
 }
 
 // -------------------------------------------------------
@@ -254,14 +290,13 @@ export interface TaiexData {
 
 export async function fetchTaiex(): Promise<TaiexData | null> {
   try {
-    const quote = await fetchQuote('^TWII');
     const history = await fetchHistory('^TWII', 25);
-    const closes = history.map((h) => h.close);
-    return {
-      close: quote.regularMarketPrice,
-      dailyChangePct: quote.regularMarketChangePercent,
-      closes,
-    };
+    if (history.length < 2) return null;
+    const closes = history.map(h => h.close);
+    const last = closes[closes.length - 1];
+    const prev = closes[closes.length - 2];
+    const dailyChangePct = prev > 0 ? ((last - prev) / prev) * 100 : 0;
+    return { close: last, dailyChangePct, closes };
   } catch {
     return null;
   }
