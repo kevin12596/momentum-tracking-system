@@ -343,6 +343,12 @@ export async function fetchStockData(
       fetchHistory(symbol, 65),
     ]);
     if (history.length < 20) return null;
+    // If real-time price is unavailable (blocked/after-hours), use last historical close
+    if (quote.regularMarketPrice === 0 && history.length > 0) {
+      const lastClose = history[history.length - 1].close;
+      quote.regularMarketPrice = lastClose;
+      if (quote.regularMarketPreviousClose === 0) quote.regularMarketPreviousClose = lastClose;
+    }
     return { quote, history };
   } catch {
     return null;
