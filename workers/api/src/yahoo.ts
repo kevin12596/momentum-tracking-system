@@ -151,11 +151,16 @@ export interface HistoricalBar {
 // TSE:  twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=2330&date=20260301&response=json
 // OTC:  tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=115/03&stkno=3037&...
 async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: number): Promise<HistoricalBar[]> {
-  const today = new Date();
+  // Always use Taiwan local time (UTC+8) — Cloudflare Workers run in UTC,
+  // so using new Date() directly would pick the wrong month before 16:00 UTC.
+  const utcNow = new Date();
+  const twNow  = new Date(utcNow.getTime() + 8 * 60 * 60 * 1000); // shift to UTC+8
+  const twYear  = twNow.getUTCFullYear();
+  const twMonth = twNow.getUTCMonth(); // 0-based
 
   const monthBarsResults = await Promise.all(
     [0, 1, 2, 3].map(async (offset): Promise<HistoricalBar[]> => {
-      const d = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+      const d = new Date(twYear, twMonth - offset, 1);
       try {
         let rows: string[][] = [];
         if (exchange === 'TSE') {
