@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
+import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName, fetchAllTseLatest, fetchAllOtcLatest } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -193,16 +193,24 @@ async function runPriceMonitor(env: Env): Promise<void> {
     for (const sym of syms) sectorMap.set(sym, sector);
   }
 
-  // ③ Process each stock
+  // ③ Batch-fetch latest closing prices for ALL TSE + OTC stocks in two API calls.
+  //    This is the authoritative current price; avoids per-stock TWSE rate limiting.
+  const [tseBatch, otcBatch] = await Promise.all([
+    fetchAllTseLatest(),
+    fetchAllOtcLatest(),
+  ]);
+  const batchPrices = new Map([...tseBatch, ...otcBatch]);
+  console.log(`Batch prices loaded: ${batchPrices.size} stocks`);
+
   const sectorDailyPerfCache = new Map<string, number>();
 
   for (const stock of stocks) {
     try {
-      await processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env);
+      await processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env, batchPrices);
     } catch (err) {
       console.error(`Failed to process ${stock.symbol}:`, err);
     }
-    // Brief pause between stocks to avoid TWSE/TPEX rate limiting
+    // Brief pause between stocks to avoid TWSE/TPEX rate limiting on history fetches
     await new Promise(r => setTimeout(r, 300));
   }
 
@@ -243,9 +251,12 @@ async function processStock(
   sectors: SectorGroup[],
   volatilityMode: 'NORMAL' | 'HIGH',
   taiexChangePct: number,
-  env: Env
+  env: Env,
+  batchPrices: Map<string, number> = new Map()
 ): Promise<void> {
-  const data = await fetchStockData(stock.symbol);
+  const stockCode = stock.symbol.replace(/\.(TW|TWO)$/, '');
+  const batchPrice = batchPrices.get(stockCode) ?? 0;
+  const data = await fetchStockData(stock.symbol, batchPrice || undefined);
   if (!data) {
     console.warn(`No data for ${stock.symbol}`);
     return;
