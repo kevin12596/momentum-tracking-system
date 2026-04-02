@@ -298,15 +298,33 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
   if (isTW) {
     const code = fromYahooSymbol(symbol);
     const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
+
+    // Helper: days since last bar using Taiwan time (UTC+8)
+    const staleness = (b: HistoricalBar[]): number => {
+      if (b.length === 0) return 999;
+      const twNow = Date.now() + 8 * 60 * 60 * 1000;
+      return (twNow - b[b.length - 1].date.getTime()) / 86_400_000;
+    };
+    // A source is "fresh" if its last bar is within 7 calendar days.
+    // 7 days covers normal weekends (Fri close → Mon morning = 3 days)
+    // and short holiday breaks (up to ~5 days).
+    const isFresh = (b: HistoricalBar[]) => b.length >= 20 && staleness(b) < 7;
+
     const bars = await fetchTwseHistory(code, exchange, days);
-    if (bars.length >= 20) return bars;
+    console.log(`[hist] ${symbol} TWSE/${exchange}: ${bars.length} bars, ${staleness(bars).toFixed(1)}d ago`);
+    if (isFresh(bars)) return bars;
+
     // Fallback 1: try the other exchange (handles mis-classified stocks)
     const altExchange: 'TSE' | 'OTC' = exchange === 'OTC' ? 'TSE' : 'OTC';
     const altBars = await fetchTwseHistory(code, altExchange, days);
-    if (altBars.length >= 20) return altBars;
+    console.log(`[hist] ${symbol} TWSE/${altExchange}: ${altBars.length} bars, ${staleness(altBars).toFixed(1)}d ago`);
+    if (isFresh(altBars)) return altBars;
+
     // Fallback 2: stooq.com CSV (reliable, no rate-limit, no auth)
     const stooqBars = await fetchStooqHistory(code, days);
-    if (stooqBars.length >= 5) return stooqBars;
+    console.log(`[hist] ${symbol} stooq: ${stooqBars.length} bars, ${staleness(stooqBars).toFixed(1)}d ago`);
+    if (stooqBars.length >= 5 && staleness(stooqBars) < 7) return stooqBars;
+
     // Fallback 3: Yahoo historical (may work via different CDN path)
     try {
       const period1 = new Date();
@@ -318,8 +336,10 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     // Fallback 4: direct Yahoo chart HTTP (bypasses library)
     const directBars = await fetchYahooChartDirect(symbol, days);
     if (directBars && directBars.length >= 5) return directBars;
-    // Return best available
-    return altBars.length > bars.length ? altBars : bars;
+    // Return freshest available among all tried sources
+    const candidates = [bars, altBars, stooqBars].filter(b => b.length > 0);
+    if (candidates.length === 0) return [];
+    return candidates.sort((a, b) => b[b.length - 1].date.getTime() - a[a.length - 1].date.getTime())[0];
   }
 
   // Non-TW: try yahoo-finance2, then direct HTTP chart API
