@@ -1,11 +1,11 @@
 // ============================================================
 // Cloudflare Worker entry point
 // - fetch()     → REST API + LINE webhook
-// - scheduled() → price monitor cron (*/5 1-5 * * 1-5)
+// - scheduled() → daily closing-price scan at 14:30 Taiwan (06:30 UTC)
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
+import { isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -129,13 +129,7 @@ export default {
   // -------------------------------------------------------
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Double-check trading hours in code (cron is UTC-based approximation)
-    if (!isTradingHours()) {
-      console.log('Outside trading hours, skipping cron run');
-      return;
-    }
-
-    console.log('Starting price monitor cron run...');
+    console.log('Starting daily closing-price scan...');
 
     try {
       await runPriceMonitor(env);
@@ -193,7 +187,9 @@ async function runPriceMonitor(env: Env): Promise<void> {
     for (const sym of syms) sectorMap.set(sym, sector);
   }
 
-  // ③ Process each stock
+  // ③ Process each watchlist stock sequentially.
+  //    Running once after market close: TWSE always has today's data by 14:30.
+  //    Sequential with 300ms gap is plenty fast for ~15 stocks and avoids any rate limiting.
   const sectorDailyPerfCache = new Map<string, number>();
 
   for (const stock of stocks) {
@@ -202,7 +198,6 @@ async function runPriceMonitor(env: Env): Promise<void> {
     } catch (err) {
       console.error(`Failed to process ${stock.symbol}:`, err);
     }
-    // Brief pause between stocks to avoid TWSE/TPEX rate limiting
     await new Promise(r => setTimeout(r, 300));
   }
 
@@ -326,7 +321,17 @@ async function processStock(
 
   // ③ Watch zone entry
   if (triggers.watchZoneEntry) {
-    const msg = `👀 觀察帶提醒\n${stock.name}（${stock.symbol.replace(/\.(TW|TWO)$/, '')}）\n現價 NT$${ind.currentPrice.toFixed(0)}，回測 ${ind.pullbackPct.toFixed(1)}%，進入觀察帶`;
+    const _shortCode = stock.symbol.replace(/\.(TW|TWO)$/, '');
+    const _watchPct  = stock.pullback_watch_pct  ?? 8;
+    const _idealPct  = stock.pullback_ideal_pct  ?? 13;
+    const _maxPct    = stock.pullback_max_pct    ?? 20;
+    const _idealHigh = stock.day60_high ? stock.day60_high * (1 - _watchPct  / 100) : null;
+    const _idealLow  = stock.day60_high ? stock.day60_high * (1 - _idealPct  / 100) : null;
+    const _maxPrice  = stock.day60_high ? stock.day60_high * (1 - _maxPct    / 100) : null;
+    const _zoneLines = _idealHigh && _idealLow && _maxPrice
+      ? `\n理想買入帶：NT$${_idealLow.toFixed(0)}–${_idealHigh.toFixed(0)}（回測 ${_idealPct}%–${_watchPct}%）\n最大容忍：NT$${_maxPrice.toFixed(0)}（回測 ${_maxPct}%）`
+      : '';
+    const msg = `👀 觀察帶提醒\n${stock.name}（${_shortCode}）\n現價 NT$${ind.currentPrice.toFixed(0)}，回測 ${ind.pullbackPct.toFixed(1)}%，進入觀察帶${_zoneLines}`;
     const sent = await sendNotification(msg, 'PULLBACK_WATCH', stock, env);
     if (sent) {
       await updateLastNotified(env.DB, stock.id);

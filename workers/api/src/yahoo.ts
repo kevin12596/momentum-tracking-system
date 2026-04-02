@@ -151,11 +151,16 @@ export interface HistoricalBar {
 // TSE:  twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=2330&date=20260301&response=json
 // OTC:  tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php?l=zh-tw&d=115/03&stkno=3037&...
 async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: number): Promise<HistoricalBar[]> {
-  const today = new Date();
+  // Always use Taiwan local time (UTC+8) — Cloudflare Workers run in UTC,
+  // so using new Date() directly would pick the wrong month before 16:00 UTC.
+  const utcNow = new Date();
+  const twNow  = new Date(utcNow.getTime() + 8 * 60 * 60 * 1000); // shift to UTC+8
+  const twYear  = twNow.getUTCFullYear();
+  const twMonth = twNow.getUTCMonth(); // 0-based
 
   const monthBarsResults = await Promise.all(
     [0, 1, 2, 3].map(async (offset): Promise<HistoricalBar[]> => {
-      const d = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+      const d = new Date(twYear, twMonth - offset, 1);
       try {
         let rows: string[][] = [];
         if (exchange === 'TSE') {
@@ -212,6 +217,38 @@ async function fetchTwseHistory(code: string, exchange: 'TSE' | 'OTC', days: num
   return allBars.slice(-days);
 }
 
+// Stooq.com CSV download — reliable Taiwan stock fallback, no auth needed
+// URL format: https://stooq.com/q/d/l/?s=2313.tw&i=d
+async function fetchStooqHistory(code: string, days: number): Promise<HistoricalBar[]> {
+  try {
+    const resp = await fetch(
+      `https://stooq.com/q/d/l/?s=${code.toLowerCase()}.tw&i=d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!resp.ok) return [];
+    const csv = await resp.text();
+    if (!csv.includes(',')) return [];
+    const lines = csv.trim().split('\n');
+    if (lines.length < 2) return [];
+    const bars: HistoricalBar[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(',');
+      if (parts.length < 5) continue;
+      const date = new Date(parts[0]);
+      const open  = parseFloat(parts[1]);
+      const high  = parseFloat(parts[2]);
+      const low   = parseFloat(parts[3]);
+      const close = parseFloat(parts[4]);
+      const vol   = parseInt(parts[5] ?? '0', 10) || 0;
+      if (isNaN(date.getTime()) || close <= 0) continue;
+      bars.push({ date, open: open || close, high: high || close, low: low || close, close, adjClose: close, volume: vol });
+    }
+    return bars.sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-days);
+  } catch {
+    return [];
+  }
+}
+
 async function fetchYahooChartDirect(symbol: string, days: number): Promise<HistoricalBar[] | null> {
   try {
     const range = days <= 30 ? '1mo' : days <= 90 ? '3mo' : '6mo';
@@ -261,13 +298,34 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
   if (isTW) {
     const code = fromYahooSymbol(symbol);
     const exchange = symbol.endsWith('.TWO') ? 'OTC' : 'TSE';
+
+    // Helper: days since last bar using Taiwan time (UTC+8)
+    const staleness = (b: HistoricalBar[]): number => {
+      if (b.length === 0) return 999;
+      const twNow = Date.now() + 8 * 60 * 60 * 1000;
+      return (twNow - b[b.length - 1].date.getTime()) / 86_400_000;
+    };
+    // A source is "fresh" if its last bar is within 7 calendar days.
+    // 7 days covers normal weekends (Fri close → Mon morning = 3 days)
+    // and short holiday breaks (up to ~5 days).
+    const isFresh = (b: HistoricalBar[]) => b.length >= 20 && staleness(b) < 7;
+
     const bars = await fetchTwseHistory(code, exchange, days);
-    if (bars.length >= 20) return bars;
+    console.log(`[hist] ${symbol} TWSE/${exchange}: ${bars.length} bars, ${staleness(bars).toFixed(1)}d ago`);
+    if (isFresh(bars)) return bars;
+
     // Fallback 1: try the other exchange (handles mis-classified stocks)
     const altExchange: 'TSE' | 'OTC' = exchange === 'OTC' ? 'TSE' : 'OTC';
     const altBars = await fetchTwseHistory(code, altExchange, days);
-    if (altBars.length >= 20) return altBars;
-    // Fallback 2: Yahoo historical (may work via different CDN path)
+    console.log(`[hist] ${symbol} TWSE/${altExchange}: ${altBars.length} bars, ${staleness(altBars).toFixed(1)}d ago`);
+    if (isFresh(altBars)) return altBars;
+
+    // Fallback 2: stooq.com CSV (reliable, no rate-limit, no auth)
+    const stooqBars = await fetchStooqHistory(code, days);
+    console.log(`[hist] ${symbol} stooq: ${stooqBars.length} bars, ${staleness(stooqBars).toFixed(1)}d ago`);
+    if (stooqBars.length >= 5 && staleness(stooqBars) < 7) return stooqBars;
+
+    // Fallback 3: Yahoo historical (may work via different CDN path)
     try {
       const period1 = new Date();
       period1.setDate(period1.getDate() - days);
@@ -275,11 +333,13 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
       const yBars = results.filter(r => r.close != null).map(r => ({ date: r.date, open: r.open ?? r.close, high: r.high ?? r.close, low: r.low ?? r.close, close: r.adjClose ?? r.close, adjClose: r.adjClose ?? r.close, volume: r.volume ?? 0 })).sort((a, b) => a.date.getTime() - b.date.getTime());
       if (yBars.length >= 5) return yBars;
     } catch { /* blocked */ }
-    // Fallback 3: direct Yahoo chart HTTP (bypasses library)
+    // Fallback 4: direct Yahoo chart HTTP (bypasses library)
     const directBars = await fetchYahooChartDirect(symbol, days);
     if (directBars && directBars.length >= 5) return directBars;
-    // Return best available
-    return altBars.length > bars.length ? altBars : bars;
+    // Return freshest available among all tried sources
+    const candidates = [bars, altBars, stooqBars].filter(b => b.length > 0);
+    if (candidates.length === 0) return [];
+    return candidates.sort((a, b) => b[b.length - 1].date.getTime() - a[a.length - 1].date.getTime())[0];
   }
 
   // Non-TW: try yahoo-finance2, then direct HTTP chart API
@@ -363,18 +423,18 @@ export async function fetchStockData(
     ]);
     if (history.length < 20) return null;
 
-    // For TW stocks the quote has no price yet — derive from last two history bars
+    // For TW stocks the quote price is 0 (set to zero in fetchQuote intentionally).
+    // Derive price fields from the last two history bars (closing prices only).
     if (quote.regularMarketPrice === 0 && history.length > 0) {
       const last = history[history.length - 1];
       const prev = history.length >= 2 ? history[history.length - 2] : last;
-      quote.regularMarketPrice    = last.close;
-      quote.regularMarketPreviousClose = prev.close;
-      quote.regularMarketVolume   = last.volume;
-      quote.regularMarketDayHigh  = last.high;
-      quote.regularMarketDayLow   = last.low;
-      quote.regularMarketOpen     = last.open;
-      quote.regularMarketChangePercent =
-        prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
+      quote.regularMarketPrice           = last.close;
+      quote.regularMarketPreviousClose   = prev.close;
+      quote.regularMarketVolume          = last.volume;
+      quote.regularMarketDayHigh         = last.high;
+      quote.regularMarketDayLow          = last.low;
+      quote.regularMarketOpen            = last.open;
+      quote.regularMarketChangePercent   = prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
     }
 
     return { quote, history };
