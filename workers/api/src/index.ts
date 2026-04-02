@@ -1,11 +1,11 @@
 // ============================================================
 // Cloudflare Worker entry point
 // - fetch()     → REST API + LINE webhook
-// - scheduled() → price monitor cron (*/5 1-5 * * 1-5)
+// - scheduled() → daily closing-price scan at 14:30 Taiwan (06:30 UTC)
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isTradingHours, isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName, fetchAllTseLatest, fetchAllOtcLatest } from './yahoo';
+import { isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -129,13 +129,7 @@ export default {
   // -------------------------------------------------------
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Double-check trading hours in code (cron is UTC-based approximation)
-    if (!isTradingHours()) {
-      console.log('Outside trading hours, skipping cron run');
-      return;
-    }
-
-    console.log('Starting price monitor cron run...');
+    console.log('Starting daily closing-price scan...');
 
     try {
       await runPriceMonitor(env);
@@ -193,24 +187,17 @@ async function runPriceMonitor(env: Env): Promise<void> {
     for (const sym of syms) sectorMap.set(sym, sector);
   }
 
-  // ③ Batch-fetch latest closing prices for ALL TSE + OTC stocks in two API calls.
-  //    This is the authoritative current price; avoids per-stock TWSE rate limiting.
-  const [tseBatch, otcBatch] = await Promise.all([
-    fetchAllTseLatest(),
-    fetchAllOtcLatest(),
-  ]);
-  const batchPrices = new Map([...tseBatch, ...otcBatch]);
-  console.log(`Batch prices loaded: ${batchPrices.size} stocks`);
-
+  // ③ Process each watchlist stock sequentially.
+  //    Running once after market close: TWSE always has today's data by 14:30.
+  //    Sequential with 300ms gap is plenty fast for ~15 stocks and avoids any rate limiting.
   const sectorDailyPerfCache = new Map<string, number>();
 
   for (const stock of stocks) {
     try {
-      await processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env, batchPrices);
+      await processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env);
     } catch (err) {
       console.error(`Failed to process ${stock.symbol}:`, err);
     }
-    // Brief pause between stocks to avoid TWSE/TPEX rate limiting on history fetches
     await new Promise(r => setTimeout(r, 300));
   }
 
@@ -251,12 +238,9 @@ async function processStock(
   sectors: SectorGroup[],
   volatilityMode: 'NORMAL' | 'HIGH',
   taiexChangePct: number,
-  env: Env,
-  batchPrices: Map<string, number> = new Map()
+  env: Env
 ): Promise<void> {
-  const stockCode = stock.symbol.replace(/\.(TW|TWO)$/, '');
-  const batchPrice = batchPrices.get(stockCode) ?? 0;
-  const data = await fetchStockData(stock.symbol, batchPrice || undefined);
+  const data = await fetchStockData(stock.symbol);
   if (!data) {
     console.warn(`No data for ${stock.symbol}`);
     return;

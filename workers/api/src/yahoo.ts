@@ -413,72 +413,8 @@ export async function lookupStockName(symbol: string): Promise<string | null> {
 // Full indicator data fetch for a single stock
 // -------------------------------------------------------
 
-/**
- * Batch-fetch the latest closing price for every TSE-listed stock in ONE API call.
- * TWSE STOCK_DAY_ALL returns the most recent trading day's data for all ~1000 TSE stocks.
- * This completely avoids per-stock rate limiting.
- * Returns Map<stockCode, latestClose>
- */
-export async function fetchAllTseLatest(): Promise<Map<string, number>> {
-  const result = new Map<string, number>();
-  try {
-    const resp = await fetch(
-      'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
-      { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.twse.com.tw/' },
-        signal: AbortSignal.timeout(15000) }
-    );
-    if (!resp.ok) return result;
-    const data = await resp.json() as { stat?: string; data?: string[][] };
-    if (data.stat !== 'OK' || !data.data) return result;
-    // Fields: [證券代號, 證券名稱, 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, 漲跌(+/-), 漲跌價差, ...]
-    for (const row of data.data) {
-      const code  = row[0]?.trim();
-      const close = parseFloat(row[7]?.replace(/,/g, '') ?? '');
-      if (code && close > 0) result.set(code, close);
-    }
-    console.log(`[batch] TSE STOCK_DAY_ALL: ${result.size} stocks`);
-  } catch (err) {
-    console.error('[batch] TSE STOCK_DAY_ALL failed:', err);
-  }
-  return result;
-}
-
-/**
- * Batch-fetch the latest closing price for every TPEX OTC-listed stock in ONE API call.
- * Returns Map<stockCode, latestClose>
- */
-export async function fetchAllOtcLatest(): Promise<Map<string, number>> {
-  const result = new Map<string, number>();
-  try {
-    // Use Taiwan date (UTC+8) in ROC year format for TPEX
-    const twNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    const rocYear = twNow.getUTCFullYear() - 1911;
-    const mm = String(twNow.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(twNow.getUTCDate()).padStart(2, '0');
-    const resp = await fetch(
-      `https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&d=${rocYear}/${mm}/${dd}&output=json`,
-      { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.tpex.org.tw/' },
-        signal: AbortSignal.timeout(15000) }
-    );
-    if (!resp.ok) return result;
-    const data = await resp.json() as { aaData?: string[][] };
-    if (!data.aaData) return result;
-    // Fields: [代號, 名稱, 收盤, 漲跌, 開盤, 最高, 最低, 成交量(張), ...]
-    for (const row of data.aaData) {
-      const code  = row[0]?.trim();
-      const close = parseFloat(row[2]?.replace(/,/g, '') ?? '');
-      if (code && close > 0) result.set(code, close);
-    }
-    console.log(`[batch] OTC daily quotes: ${result.size} stocks`);
-  } catch (err) {
-    console.error('[batch] OTC daily quotes failed:', err);
-  }
-  return result;
-}
-
 export async function fetchStockData(
-  symbol: string,
-  batchPrice?: number          // authoritative closing price from STOCK_DAY_ALL batch fetch
+  symbol: string
 ): Promise<{ quote: QuoteResult; history: HistoricalBar[] } | null> {
   try {
     const [quote, history] = await Promise.all([
@@ -487,26 +423,9 @@ export async function fetchStockData(
     ]);
     if (history.length < 20) return null;
 
-    // Determine current price:
-    //   1st priority — batchPrice (from STOCK_DAY_ALL, always the latest trading day)
-    //   2nd priority — last history bar close (may lag by 1 trading day if TWSE API missed current month)
-    const isTW = symbol.endsWith('.TW') || symbol.endsWith('.TWO');
-    if (isTW && batchPrice && batchPrice > 0) {
-      // Batch price is the authoritative close. Use last history bar as prev close.
-      const last = history[history.length - 1];
-      const prev = history.length >= 2 ? history[history.length - 2] : last;
-      // If batchPrice matches last bar exactly, prev bar is the day before
-      const prevClose = batchPrice === last.close ? prev.close : last.close;
-      quote.regularMarketPrice           = batchPrice;
-      quote.regularMarketPreviousClose   = prevClose;
-      quote.regularMarketChangePercent   = prevClose > 0 ? ((batchPrice - prevClose) / prevClose) * 100 : 0;
-      quote.regularMarketVolume          = last.volume;
-      quote.regularMarketDayHigh         = last.high;
-      quote.regularMarketDayLow          = last.low;
-      quote.regularMarketOpen            = last.open;
-      console.log(`[price] ${symbol}: batch=${batchPrice} history_last=${last.close}`);
-    } else if (quote.regularMarketPrice === 0 && history.length > 0) {
-      // Fallback: derive price from last two history bars
+    // For TW stocks the quote price is 0 (set to zero in fetchQuote intentionally).
+    // Derive price fields from the last two history bars (closing prices only).
+    if (quote.regularMarketPrice === 0 && history.length > 0) {
       const last = history[history.length - 1];
       const prev = history.length >= 2 ? history[history.length - 2] : last;
       quote.regularMarketPrice           = last.close;
