@@ -187,19 +187,16 @@ async function runPriceMonitor(env: Env): Promise<void> {
     for (const sym of syms) sectorMap.set(sym, sector);
   }
 
-  // ③ Process each watchlist stock sequentially.
-  //    Running once after market close: TWSE always has today's data by 14:30.
-  //    Sequential with 300ms gap is plenty fast for ~15 stocks and avoids any rate limiting.
-  const sectorDailyPerfCache = new Map<string, number>();
-
-  for (const stock of stocks) {
-    try {
-      await processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env);
-    } catch (err) {
-      console.error(`Failed to process ${stock.symbol}:`, err);
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
+  // ③ Process all watchlist stocks in PARALLEL.
+  //    Running once after market close means no TWSE rate-limiting concern.
+  //    Parallel execution: total time = slowest stock (~5-13s) instead of sum (~150s).
+  //    This keeps the HTTP /api/scan handler well within the 30s Worker limit.
+  await Promise.all(
+    stocks.map(stock =>
+      processStock(stock, stocks, sectors, volatilityMode, taiexChangePct, env)
+        .catch(err => console.error(`Failed to process ${stock.symbol}:`, err))
+    )
+  );
 
   // ④ Weekly Monday enrichment refresh
   if (isWeeklyRefreshTime()) {

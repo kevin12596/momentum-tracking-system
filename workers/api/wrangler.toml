@@ -14,9 +14,9 @@ database_id = "00000000-0000-0000-0000-000000000000"
 [vars]
 CLAUDE_DAILY_CALL_LIMIT = "10"
 
-# Cron: once daily at 06:30 UTC = 14:30 Taiwan time (after market close at 13:30)
+# Cron: once daily at 07:30 UTC = 15:30 Taiwan time (1hr after market close, data fully published)
 [triggers]
-crons = ["30 6 * * 1-5"]
+crons = ["30 7 * * 1-5"]
 
 # Development settings
 [dev]
