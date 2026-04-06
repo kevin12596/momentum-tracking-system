@@ -410,6 +410,31 @@ export async function lookupStockName(symbol: string): Promise<string | null> {
 }
 
 // -------------------------------------------------------
+// TWSE MIS closing price — last-resort fallback
+// -------------------------------------------------------
+// Used when monthly STOCK_DAY + TPEX + stooq all return 0 bars
+// (e.g. 興櫃 stocks, stocks not indexed by stooq, temporary suspensions).
+// After market close (13:30 Taiwan), `z` = today's closing price.
+// Tries tse_ and otc_ in one request; uses whichever responds.
+export async function fetchMisPrice(code: string): Promise<number | null> {
+  try {
+    const resp = await fetch(
+      `https://mis.twse.com.tw/stock/api/getStockInfo.asp?json=1&delay=0&ex_ch=tse_${code}.tw%7Cotc_${code}.tw`,
+      { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://mis.twse.com.tw/' }, signal: AbortSignal.timeout(5000) }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json() as { msgArray?: Array<{ z?: string; y?: string }> };
+    const stock = data.msgArray?.find(s => s.z && s.z !== '-') ?? data.msgArray?.[0];
+    if (!stock) return null;
+    // z = last trade price (closing price after market close), y = previous close
+    const price = parseFloat(stock.z ?? '') || parseFloat(stock.y ?? '') || 0;
+    return price > 0 ? price : null;
+  } catch {
+    return null;
+  }
+}
+
+// -------------------------------------------------------
 // Full indicator data fetch for a single stock
 // -------------------------------------------------------
 

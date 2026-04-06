@@ -29,12 +29,17 @@
 ### TWSE / TPEX 回應欄位（兩者共用）
 `row[0]`=日期(ROC年/月/日) `row[1]`=成交量 `row[3]`=開 `row[4]`=高 `row[5]`=低 `row[6]`=收
 
-### Fallback 順序（`fetchHistory`）
+### Fallback 順序（`fetchHistory` → `processStock`）
 1. TWSE/TPEX primary exchange
 2. Alt exchange（TSE↔OTC swap，處理分類錯誤的股票）
 3. stooq.com CSV：`https://stooq.com/q/d/l/?s={code}.tw&i=d`
 4. Yahoo Finance（通常被擋）
 5. 回傳所有來源中最新的一筆
+
+若以上全部回傳 0 bars（興櫃股、stooq 未收錄、短暫停牌），`processStock` 另外呼叫：
+6. **TWSE MIS API**（price-only，不更新指標）：
+   `https://mis.twse.com.tw/stock/api/getStockInfo.asp?json=1&delay=0&ex_ch=tse_{code}.tw%7Cotc_{code}.tw`
+   收盤後 `z` 欄位 = 當日收盤價，`y` 欄位 = 前日收盤價（備用）
 
 ### 新鮮度閾值
 最後一筆 bar 必須在 **7 個日曆日**內（台灣時間 UTC+8）。

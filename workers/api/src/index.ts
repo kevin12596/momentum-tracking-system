@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isWeeklyRefreshTime, fetchStockData, fetchTaiex, lookupStockName } from './yahoo';
+import { isWeeklyRefreshTime, fetchStockData, fetchMisPrice, fetchTaiex, lookupStockName } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -239,7 +239,19 @@ async function processStock(
 ): Promise<void> {
   const data = await fetchStockData(stock.symbol);
   if (!data) {
-    console.warn(`No data for ${stock.symbol}`);
+    // All history sources (TWSE/TPEX/stooq) returned 0 bars.
+    // Happens for 興櫃 stocks, stocks not in stooq, or temporary suspensions.
+    // Fall back to TWSE MIS API for price-only update (no indicator recalculation).
+    const code = stock.symbol.replace(/\.(TW|TWO)$/, '');
+    const misPrice = await fetchMisPrice(code).catch(() => null);
+    if (misPrice) {
+      await env.DB.prepare(
+        `UPDATE watchlist SET current_price = ?, price_updated_at = ? WHERE id = ?`
+      ).bind(misPrice, new Date().toISOString(), stock.id).run();
+      console.log(`[MIS fallback] ${stock.symbol} → NT$${misPrice}`);
+    } else {
+      console.warn(`No data for ${stock.symbol} (all sources failed including MIS)`);
+    }
     return;
   }
 
