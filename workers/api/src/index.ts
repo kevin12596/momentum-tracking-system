@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { Env, WatchlistStock, SectorGroup, PullbackZone } from './types';
-import { isWeeklyRefreshTime, fetchStockData, fetchMisPrice, fetchTaiex, lookupStockName } from './yahoo';
+import { isWeeklyRefreshTime, fetchStockData, fetchMisPrice, fetchMisData, isValidChineseName, fetchTaiex, lookupStockName } from './yahoo';
 import {
   calcIndicators,
   calcTrendState,
@@ -295,6 +295,17 @@ async function processStock(
 
   // Write back to D1
   await writebackIndicators(env.DB, stock.id, ind, pullbackZone, trendState);
+
+  // Self-healing: fix missing/English names on every scan cycle.
+  // Success criterion: stock name must contain ≥2 Chinese characters.
+  if (!isValidChineseName(stock.name)) {
+    const code = stock.symbol.replace(/\.(TW|TWO)$/, '');
+    const { name: misName } = await fetchMisData(code).catch(() => ({ price: null, name: null }));
+    if (misName && isValidChineseName(misName)) {
+      await updateWatchlistStock(env.DB, stock.id, { name: misName } as any).catch(console.error);
+      console.log(`[name] ${stock.symbol}: "${stock.name}" → "${misName}"`);
+    }
+  }
 
   // Evaluate notification triggers
   const triggers = evaluateTriggers(ind, prevZone);

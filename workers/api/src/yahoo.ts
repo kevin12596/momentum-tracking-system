@@ -409,12 +409,17 @@ export async function fetchTaiex(): Promise<TaiexData | null> {
 // -------------------------------------------------------
 
 export async function lookupStockName(symbol: string): Promise<string | null> {
+  const code = fromYahooSymbol(symbol);
+  if (symbol.endsWith('.TW') || symbol.endsWith('.TWO')) {
+    // MIS API is the most reliable source: returns official TWSE/TPEX Chinese name
+    const { name: misName } = await fetchMisData(code).catch(() => ({ price: null, name: null }));
+    if (misName && isValidChineseName(misName)) return misName;
+    // Fallback: TWSE codeQuery
+    const zhName = await fetchZhName(code).catch(() => null);
+    if (zhName && isValidChineseName(zhName)) return zhName;
+    return misName ?? zhName ?? null;
+  }
   try {
-    const code = fromYahooSymbol(symbol);
-    if (symbol.endsWith('.TW') || symbol.endsWith('.TWO')) {
-      const zhName = await fetchZhName(code);
-      if (zhName) return zhName;
-    }
     const result = await fetchQuote(symbol);
     return result.longName ?? result.shortName ?? null;
   } catch {
@@ -423,28 +428,38 @@ export async function lookupStockName(symbol: string): Promise<string | null> {
 }
 
 // -------------------------------------------------------
-// TWSE MIS closing price — last-resort fallback
+// TWSE MIS API — price + name from a single request
 // -------------------------------------------------------
-// Used when monthly STOCK_DAY + TPEX + stooq all return 0 bars
-// (e.g. 興櫃 stocks, stocks not indexed by stooq, temporary suspensions).
-// After market close (13:30 Taiwan), `z` = today's closing price.
-// Tries tse_ and otc_ in one request; uses whichever responds.
-export async function fetchMisPrice(code: string): Promise<number | null> {
+// MIS response fields: z=last price, y=prev close, n=Chinese company name
+// Tries tse_ and otc_ in one request; uses whichever entry has data.
+export async function fetchMisData(code: string): Promise<{ price: number | null; name: string | null }> {
   try {
     const resp = await fetch(
       `https://mis.twse.com.tw/stock/api/getStockInfo.asp?json=1&delay=0&ex_ch=tse_${code}.tw%7Cotc_${code}.tw`,
       { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://mis.twse.com.tw/' }, signal: AbortSignal.timeout(5000) }
     );
-    if (!resp.ok) return null;
-    const data = await resp.json() as { msgArray?: Array<{ z?: string; y?: string }> };
-    const stock = data.msgArray?.find(s => s.z && s.z !== '-') ?? data.msgArray?.[0];
-    if (!stock) return null;
-    // z = last trade price (closing price after market close), y = previous close
+    if (!resp.ok) return { price: null, name: null };
+    const data = await resp.json() as { msgArray?: Array<{ z?: string; y?: string; n?: string }> };
+    const stock = data.msgArray?.find(s => s.n && s.n !== '-') ?? data.msgArray?.[0];
+    if (!stock) return { price: null, name: null };
     const price = parseFloat(stock.z ?? '') || parseFloat(stock.y ?? '') || 0;
-    return price > 0 ? price : null;
+    const name = stock.n?.trim() ?? null;
+    return {
+      price: price > 0 ? price : null,
+      name: name && name !== '-' ? name : null,
+    };
   } catch {
-    return null;
+    return { price: null, name: null };
   }
+}
+
+export async function fetchMisPrice(code: string): Promise<number | null> {
+  return (await fetchMisData(code)).price;
+}
+
+/** Returns true if the string contains at least 2 CJK characters (valid Chinese stock name). */
+export function isValidChineseName(name: string): boolean {
+  return (name.match(/[一-鿿]/g) ?? []).length >= 2 && name.length <= 15;
 }
 
 // -------------------------------------------------------

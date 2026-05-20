@@ -8,7 +8,10 @@ import {
   incrementAiCallCounter,
   updateAiAnalyzedAt,
   updateConceptTags,
+  getAllSectors,
+  updateWatchlistStock,
 } from './db';
+import { fetchMisData, isValidChineseName } from './yahoo';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
@@ -108,6 +111,8 @@ ${peerLines}
 
 // -------------------------------------------------------
 // Concept tag enrichment (spec §6)
+// Anti-hallucination: Claude can only assign tags from the
+// existing sector list in DB. Output is validated post-call.
 // -------------------------------------------------------
 
 export async function enrichConceptTags(
@@ -116,13 +121,38 @@ export async function enrichConceptTags(
   name: string,
   env: Env
 ): Promise<ConceptEnrichment | null> {
-  const prompt = `請針對台股 ${symbol}（${name}）提供以下資訊，以 JSON 格式回答：
+  // Step 1: Fix name if not Chinese (verifiable success criterion: ≥2 Chinese chars)
+  const code = symbol.replace(/\.(TW|TWO)$/, '');
+  if (!isValidChineseName(name)) {
+    const { name: misName } = await fetchMisData(code).catch(() => ({ price: null, name: null }));
+    if (misName && isValidChineseName(misName)) {
+      await updateWatchlistStock(env.DB, stockId, { name: misName } as any).catch(console.error);
+      name = misName;
+      console.log(`[name] enrichConceptTags fixed name: ${symbol} → ${misName}`);
+    }
+  }
+
+  // Step 2: Fetch existing sectors as the allowed set (constrains LLM output)
+  const sectors = await getAllSectors(env.DB);
+  const allowedSectors = sectors.map(s => s.name);
+  const sectorList = allowedSectors.length > 0
+    ? allowedSectors.join('、')
+    : '（尚未建立族群，請填空陣列）';
+
+  // Step 3: Constrained prompt — Claude maps to existing sectors only
+  const prompt = `你是台股分類系統。請針對台股 ${symbol}（${name}）提供分類資訊，以 JSON 格式回答。
+
+【重要限制】concept_tags 只能從以下現有族群清單選擇，不可自創新標籤：
+${sectorList}
+若無合適族群，concept_tags 填 []。
+
 {
-  "industry": "官方產業別（如：半導體業）",
-  "concept_tags": ["標籤1", "標籤2", "標籤3"],
-  "ai_summary": "一句話說明這家公司在其最重要族群中的定位（30字以內）"
+  "industry": "TWSE官方產業別（如：光電業、半導體業、電腦及週邊設備業）",
+  "concept_tags": ["從上方清單選，最多2個，沒有合適的就填空陣列"],
+  "ai_summary": "主要產品或業務一句話（20字內）",
+  "confidence": "HIGH或LOW（LOW=不確定族群歸屬）"
 }
-注意：只回傳 JSON，不要任何說明文字。`;
+只回傳 JSON，不要任何說明。`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -148,19 +178,33 @@ export async function enrichConceptTags(
     const textBlock = data.content.find((b) => b.type === 'text');
     if (!textBlock?.text) return null;
 
-    // Extract JSON from response (strip markdown code fences if present)
     const raw = textBlock.text.trim();
     const jsonStr = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-    const parsed = JSON.parse(jsonStr) as ConceptEnrichment;
+    const parsed = JSON.parse(jsonStr) as ConceptEnrichment & { confidence?: string };
 
     if (!parsed.industry || !Array.isArray(parsed.concept_tags) || !parsed.ai_summary) {
       return null;
     }
 
-    // Write to D1
-    await updateConceptTags(env.DB, stockId, parsed.industry, parsed.concept_tags, parsed.ai_summary);
+    // Step 4: Validate — strip any tags NOT in the allowed sector list (removes hallucinations)
+    const validTags = allowedSectors.length > 0
+      ? parsed.concept_tags.filter(t => allowedSectors.includes(t))
+      : parsed.concept_tags;
 
-    return parsed;
+    const stripped = parsed.concept_tags.length - validTags.length;
+    if (stripped > 0) {
+      console.warn(`[enrich] ${symbol}: stripped ${stripped} hallucinated tag(s): ${parsed.concept_tags.filter(t => !allowedSectors.includes(t)).join(', ')}`);
+    }
+
+    // Step 5: If confidence is LOW, clear sector tags (no sector > wrong sector)
+    const finalTags = parsed.confidence === 'LOW' ? [] : validTags;
+    if (parsed.confidence === 'LOW') {
+      console.log(`[enrich] ${symbol}: LOW confidence — sector tags cleared`);
+    }
+
+    await updateConceptTags(env.DB, stockId, parsed.industry, finalTags, parsed.ai_summary);
+
+    return { industry: parsed.industry, concept_tags: finalTags, ai_summary: parsed.ai_summary };
   } catch (err) {
     console.error('Enrichment failed for', symbol, err);
     return null;
