@@ -10,6 +10,7 @@ import {
   calcIndicators,
   calcTrendState,
   getPullbackZone,
+  calcActionSuggestion,
   calcATR20,
   calcVolatilityMode,
   evaluateTriggers,
@@ -264,6 +265,7 @@ async function processStock(
 
   ind.trendState = trendState;
   ind.pullbackZone = pullbackZone;
+  ind.actionSuggestion = calcActionSuggestion(pullbackZone, ind.volPriceSignal);
 
   // Previous zone (from DB) for transition detection
   const prevZone: PullbackZone = (stock.pullback_zone as PullbackZone) ?? 'NONE';

@@ -107,6 +107,17 @@ export type TriggerType =
   | 'AI_ANALYSIS'
   | 'MONTHLY_REVIEW';
 
+/** Volume-price relationship signal */
+export type VolPriceSignal =
+  | 'PRICE_UP_VOL_UP'     // 價漲量增 → 買進訊號
+  | 'PRICE_DOWN_VOL_DOWN' // 價跌量縮 → 回測健康，等待
+  | 'PRICE_UP_VOL_DOWN'   // 價漲量縮 → 弱反彈，謹慎
+  | 'PRICE_DOWN_VOL_UP'   // 價跌量增 → 出貨訊號，止損警示
+  | 'NEUTRAL';
+
+/** Actionable trade suggestion derived from zone + vol-price signal */
+export type ActionSuggestion = 'BUY' | 'WAIT' | 'STOP_LOSS' | 'CAUTION' | 'HOLD';
+
 /** Computed technical indicators for a single stock cycle */
 export interface StockIndicators {
   currentPrice: number;
@@ -128,6 +139,8 @@ export interface StockIndicators {
   avg20Vol: number;
   closes: number[];
   volumes: number[];
+  volPriceSignal: VolPriceSignal;
+  actionSuggestion: ActionSuggestion;
 }
 
 /** Notification trigger flags */

@@ -320,10 +320,23 @@ export async function fetchHistory(symbol: string, days: number = 65): Promise<H
     console.log(`[hist] ${symbol} TWSE/${altExchange}: ${altBars.length} bars, ${staleness(altBars).toFixed(1)}d ago`);
     if (isFresh(altBars)) return altBars;
 
-    // Fallback 2: stooq.com CSV (reliable, no rate-limit, no auth)
+    // Fallback 2: stooq.com CSV — cross-verified against MIS before use.
+    // Success criterion: stooq last close must be within 5% of MIS price.
+    // Violation = scale mismatch (e.g. stooq returning pre-split or wrong-unit prices).
     const stooqBars = await fetchStooqHistory(code, days);
     console.log(`[hist] ${symbol} stooq: ${stooqBars.length} bars, ${staleness(stooqBars).toFixed(1)}d ago`);
-    if (stooqBars.length >= 5 && staleness(stooqBars) < 7) return stooqBars;
+    if (stooqBars.length >= 5 && staleness(stooqBars) < 7) {
+      const misPrice = await fetchMisPrice(code);
+      if (misPrice && misPrice > 0) {
+        const stooqLast = stooqBars.at(-1)!.close;
+        const diff = Math.abs(stooqLast - misPrice) / misPrice;
+        console.log(`[quality] ${symbol} stooq=${stooqLast} MIS=${misPrice} diff=${(diff * 100).toFixed(1)}%`);
+        if (diff <= 0.05) return stooqBars; // ✓ verified
+        console.warn(`[quality] ${symbol} stooq REJECTED — ${(diff * 100).toFixed(1)}% divergence from MIS; trying Yahoo`);
+      } else {
+        return stooqBars; // MIS unavailable, accept stooq as-is
+      }
+    }
 
     // Fallback 3: Yahoo historical (may work via different CDN path)
     try {

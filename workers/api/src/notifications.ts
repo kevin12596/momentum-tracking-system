@@ -8,6 +8,8 @@ import type {
   StockIndicators,
   SectorGroup,
   TriggerType,
+  VolPriceSignal,
+  ActionSuggestion,
   N8nPayload,
   SectorPeer,
 } from './types';
@@ -15,6 +17,30 @@ import type {
 // -------------------------------------------------------
 // Message formatters (spec §4.1 – 4.4)
 // -------------------------------------------------------
+
+const VOL_PRICE_LABEL: Record<VolPriceSignal, string> = {
+  PRICE_UP_VOL_UP:     '價漲量增',
+  PRICE_DOWN_VOL_DOWN: '價跌量縮',
+  PRICE_UP_VOL_DOWN:   '價漲量縮',
+  PRICE_DOWN_VOL_UP:   '價跌量增',
+  NEUTRAL:             '量價平穩',
+};
+
+const ACTION_LABEL: Record<ActionSuggestion, string> = {
+  BUY:       '✅ 買進',
+  WAIT:      '⏳ 等待',
+  STOP_LOSS: '🔴 止損',
+  CAUTION:   '⚠️ 謹慎',
+  HOLD:      '🟢 持有',
+};
+
+const ACTION_DESC: Record<ActionSuggestion, string> = {
+  BUY:       '進入買點區間，量價配合',
+  WAIT:      '尚未到位，觀察中',
+  STOP_LOSS: '跌深放量，出貨訊號',
+  CAUTION:   '尚未回測即反彈放量，追高風險',
+  HOLD:      '趨勢維持，繼續持有',
+};
 
 function formatDate(isoOrDatetime: string): string {
   const d = new Date(isoOrDatetime);
@@ -57,6 +83,10 @@ export function buildIdealZoneMessage(
   const priceRange = ind.day60High - ind.day60Low;
   const rangePct = ind.day60High > 0 ? (priceRange / ind.day60High) * 100 : 0;
 
+  const actionLabel = ACTION_LABEL[ind.actionSuggestion] ?? '🟢 持有';
+  const actionDesc  = ACTION_DESC[ind.actionSuggestion]  ?? '';
+  const vpLabel     = VOL_PRICE_LABEL[ind.volPriceSignal] ?? '–';
+
   return `📊 動能買點提醒
 
 股票：${stock.name}（${stock.symbol.replace(/\.(TW|TWO)$/, '')}）
@@ -65,13 +95,14 @@ export function buildIdealZoneMessage(
 
 技術狀態
 趨勢：${ind.trendState}（${ind.trendState === 'BASING' ? '整理中' : ind.trendState === 'FALLING' ? '下跌中' : ind.trendState === 'BREAKOUT' ? '突破' : '上升'}）
-量能：${volStatus}
+量能：${volStatus}　量價訊號：${vpLabel}
 60日區間位置：${ind.pricePositionPct.toFixed(0)}%（${ind.pricePositionPct < 33 ? '低檔' : ind.pricePositionPct < 67 ? '中段' : '高檔'}）
 區間波動幅度：${rangePct.toFixed(0)}%
 
 族群狀態
 ${sectorLine}${stock.notes ? `\n備註：${stock.notes}` : ''}
 
+📋 操作建議：${actionLabel} — ${actionDesc}
 時間：${now}`;
 }
 

@@ -108,34 +108,48 @@ export async function writebackIndicators(
   pullbackZone: PullbackZone,
   trendState: TrendState
 ): Promise<void> {
+  // Success criterion: day60_high must be >= current_price.
+  // A stock's current close is always within its own 60-day range —
+  // if violated, the history source returned wrong-scale data.
+  // In that case, skip day60_high / day60_high_date to preserve the correct DB value.
+  const highIsValid = ind.day60High > 0 && ind.day60High >= ind.currentPrice;
+  if (!highIsValid && ind.currentPrice > 0) {
+    console.warn(`[quality] day60_high guard ${id}: high=${ind.day60High} < price=${ind.currentPrice} — keeping existing`);
+  }
+
   await db
     .prepare(
       `UPDATE watchlist SET
-        current_price = CASE WHEN ? > 0 THEN ? ELSE current_price END,
-        price_updated_at = CASE WHEN ? > 0 THEN datetime('now') ELSE price_updated_at END,
-        day60_high = ?,
-        day60_low = ?,
-        day60_high_date = ?,
+        current_price      = CASE WHEN ? > 0 THEN ? ELSE current_price END,
+        price_updated_at   = CASE WHEN ? > 0 THEN datetime('now') ELSE price_updated_at END,
+        day60_high         = CASE WHEN ? = 1 THEN ? ELSE day60_high END,
+        day60_low          = ?,
+        day60_high_date    = CASE WHEN ? = 1 THEN ? ELSE day60_high_date END,
         pullback_from_high = ?,
-        pullback_zone = ?,
-        trend_state = ?,
-        vol_ratio = ?,
+        pullback_zone      = ?,
+        trend_state        = ?,
+        vol_ratio          = ?,
         price_position_pct = ?,
-        updated_at = datetime('now')
+        vol_price_signal   = ?,
+        action_suggestion  = ?,
+        updated_at         = datetime('now')
       WHERE id = ?`
     )
     .bind(
-      ind.currentPrice, // CASE check
-      ind.currentPrice, // CASE value
-      ind.currentPrice, // CASE check for price_updated_at
+      ind.currentPrice,        // CASE check
+      ind.currentPrice,        // CASE value
+      ind.currentPrice,        // price_updated_at CASE check
+      highIsValid ? 1 : 0,     // day60_high guard
       ind.day60High,
       ind.day60Low,
+      highIsValid ? 1 : 0,     // day60_high_date guard
       ind.day60HighDate,
       ind.pullbackPct,
       pullbackZone,
       trendState,
       ind.volRatio,
-      ind.pricePositionPct,
+      ind.volPriceSignal,
+      ind.actionSuggestion,
       id
     )
     .run();

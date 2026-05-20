@@ -8,6 +8,8 @@ import type {
   PullbackZone,
   TrendState,
   VolatilityMode,
+  VolPriceSignal,
+  ActionSuggestion,
 } from './types';
 import type { HistoricalBar, QuoteResult } from './yahoo';
 
@@ -87,6 +89,13 @@ export function calcIndicators(
       ? ((currentPrice - closes[len - 6]) / closes[len - 6]) * 100
       : 0;
 
+  const volPriceSignal = calcVolPriceSignal(
+    currentPrice,
+    len >= 2 ? closes[len - 2] : currentPrice,
+    volRatio,
+    quote.regularMarketChangePercent
+  );
+
   return {
     currentPrice,
     open: quote.regularMarketOpen,
@@ -107,6 +116,8 @@ export function calcIndicators(
     avg20Vol,
     closes,
     volumes,
+    volPriceSignal,
+    actionSuggestion: 'HOLD', // refined in processStock after zone is known
   };
 }
 
@@ -228,4 +239,71 @@ export function isCooledDown(lastNotifiedAt: string | null, cooldownHrs: number)
   if (!lastNotifiedAt) return true;
   const diffMs = Date.now() - new Date(lastNotifiedAt).getTime();
   return diffMs >= cooldownHrs * 3_600_000;
+}
+
+// -------------------------------------------------------
+// Volume-price signal + action suggestion
+// -------------------------------------------------------
+
+/**
+ * Classify today's volume-price relationship.
+ * Thresholds: price ±1%, volRatio ≷ 1.2 / 0.8
+ */
+export function calcVolPriceSignal(
+  todayClose: number,
+  prevClose: number,
+  volRatio: number,
+  priceChangePct: number
+): VolPriceSignal {
+  // Use regularMarketChangePercent when available; fall back to bar-derived pct
+  const pct = priceChangePct !== 0
+    ? priceChangePct
+    : prevClose > 0 ? ((todayClose - prevClose) / prevClose) * 100 : 0;
+
+  const priceUp   = pct >  1.0;
+  const priceDown = pct < -1.0;
+  const volUp     = volRatio > 1.2;
+  const volDown   = volRatio < 0.8;
+
+  if (priceUp   && volUp)   return 'PRICE_UP_VOL_UP';
+  if (priceDown && volDown) return 'PRICE_DOWN_VOL_DOWN';
+  if (priceUp   && volDown) return 'PRICE_UP_VOL_DOWN';
+  if (priceDown && volUp)   return 'PRICE_DOWN_VOL_UP';
+  return 'NEUTRAL';
+}
+
+/**
+ * Derive an actionable suggestion from pullback zone + volume-price signal.
+ *
+ * | zone  | signal              | suggestion  |
+ * |-------|---------------------|-------------|
+ * | IDEAL | DOWN_VOL_DOWN       | BUY         |
+ * | IDEAL | UP_VOL_UP           | BUY         |
+ * | WATCH | DOWN_VOL_DOWN       | WAIT        |
+ * | WATCH | UP_VOL_UP           | CAUTION     |
+ * | DEEP  | DOWN_VOL_UP         | STOP_LOSS   |
+ * | DEEP  | DOWN_VOL_DOWN       | WAIT        |
+ * | NONE  | UP_VOL_UP           | HOLD        |
+ * | *     | *                   | HOLD / WAIT |
+ */
+export function calcActionSuggestion(
+  zone: PullbackZone,
+  signal: VolPriceSignal
+): ActionSuggestion {
+  if (zone === 'IDEAL') {
+    if (signal === 'PRICE_DOWN_VOL_DOWN') return 'BUY';
+    if (signal === 'PRICE_UP_VOL_UP')     return 'BUY';
+    return 'WAIT';
+  }
+  if (zone === 'WATCH') {
+    if (signal === 'PRICE_UP_VOL_UP')     return 'CAUTION';
+    if (signal === 'PRICE_DOWN_VOL_DOWN') return 'WAIT';
+    return 'WAIT';
+  }
+  if (zone === 'DEEP') {
+    if (signal === 'PRICE_DOWN_VOL_UP')   return 'STOP_LOSS';
+    return 'WAIT';
+  }
+  // NONE — trending or no signal
+  return 'HOLD';
 }
